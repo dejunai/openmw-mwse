@@ -68,8 +68,10 @@ def text_bytes(s: str) -> bytes:
 
 
 # ------------------------------------------------------------------ original package (Off/<plugin>/OpenMW/)
+# Folders the original engine reads under Data Files (compared lower-case). Vanilla uses
+# "Sound" (singular); "sounds" is kept for packages that use it with OpenMW's VFS.
 GAME_ASSET_DIRS = frozenset({
-    "meshes", "textures", "icons", "sounds", "music", "fonts",
+    "meshes", "textures", "icons", "sound", "sounds", "music", "fonts",
     "splash", "video", "bookart",
 })
 GAME_PLUGIN_SUFFIXES = frozenset({".esp", ".esm", ".bsa", ".omwaddon", ".omwgame"})

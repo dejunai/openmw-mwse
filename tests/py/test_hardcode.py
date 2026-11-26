@@ -502,3 +502,21 @@ class PluginRename(unittest.TestCase):
                 rc = main(["--convert-omwscripts=hardcode", str(root), "--accept-hardcode-conversions", "--json"])
             self.assertEqual(rc, EXIT_OK)
             self.assertEqual(json.loads(buf.getvalue())["mode"], "hardcode")
+
+
+class GameAssetsStay(unittest.TestCase):
+    def test_vanilla_sound_folder_stays_at_root(self):
+        # Player On Fire / Thieves Pickpocket / Vaults Restricted ship Sound/<mod>/... (vanilla folder name)
+        with tempfile.TemporaryDirectory() as t:
+            root = make_staged(Path(t))
+            (root / "Sound" / "Demo").mkdir(parents=True)
+            (root / "Sound" / "Demo" / "a.wav").write_bytes(b"RIFF")
+            (root / "shaders").mkdir()
+            (root / "shaders" / "x.omwfx").write_bytes(b"fx")
+            r = convert(root, "normal")
+            name = r["mods"][0]["name"]
+            self.assertTrue((root / "Sound/Demo/a.wav").is_file())
+            self.assertTrue((root / f"Off/{name}/OpenMW/Sound/Demo/a.wav").is_file())
+            # OpenMW-only folders are kept under Off/ only
+            self.assertFalse((root / "shaders").exists())
+            self.assertTrue((root / f"Off/{name}/OpenMW/shaders/x.omwfx").is_file())
