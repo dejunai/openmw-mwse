@@ -16,13 +16,15 @@
 #   scripts/package-ltlo-archive.sh
 #   SRC=/path/to/LeaveTheLightsOff scripts/package-ltlo-archive.sh
 # Output:
-#   dist-archives/mwsuite - OpenMW - Leave The Lights Off 0.2.2.7z
+#   dist-archives/mwsuite - OpenMW - Leave The Lights Off <omwcompat version>.7z
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SRC="${SRC:-$ROOT/corpus/leave-the-lights-off/_archive/full/LeaveTheLightsOff}"
 MESH_SRC="${MESH_SRC:-$SRC/meshes}"
 WORK="$ROOT/build-ltlo-archive"
-OUT_NAME="mwsuite - OpenMW - Leave The Lights Off 0.2.2"
+# the archive is named for the omwcompat runtime it is built for (BUILT_FOR in main.lua)
+RT_VERSION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$ROOT/runtime/MWSE/lib/omwcompat/manifest.json")"
+OUT_NAME="mwsuite - OpenMW - Leave The Lights Off $RT_VERSION"
 ARCHIVE_DIR="$ROOT/dist-archives"
 ARCHIVE="$ARCHIVE_DIR/$OUT_NAME.7z"
 SIDECAR="$ROOT/sidecars/LeaveTheLightsOff.omw2mwse.toml"
