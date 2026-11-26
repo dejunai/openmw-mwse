@@ -101,6 +101,7 @@ end
 --                       otherwise a session-only id (weak table keyed by the ref).
 local sessionIds = setmetatable({}, { __mode = "k" })
 function M.refId(ref, persist)
+    if tes3.player and ref == tes3.player then return "player" end   -- stable across saves
     local cid = contentId(ref)
     if cid then return cid end
     if hasLuaData(ref) then
@@ -167,8 +168,13 @@ function M.wrap(ref)
 end
 
 function M.fromId(id)
+    if id == "player" and tes3.player then return M.wrap(tes3.player) end
     local w = wrappers[id]
     if w then return w end
+    -- an inventory item saved by a script: "inv:<owner id>:<record id>" (owner ids can contain ':')
+    -- (a saved split view comes back as the whole stack)
+    local ownerId, recordId = tostring(id):gsub(":split$", ""):match("^inv:(.*):([^:]+)$")
+    if ownerId and recordId then return M.invItem(M.fromId(ownerId), recordId) end
     w = setmetatable({ _id = id, _pendingId = id }, OBJ)
     wrappers[id] = w
     return w
@@ -184,9 +190,20 @@ local TYPE_BY_OT = {}
 local types = {}
 M.types = types
 
+-- true if type X is T or derives from it through baseType (Player -> NPC -> Actor)
+local function isA(X, T)
+    local n = 0
+    while X and n < 8 do
+        if X == T then return true end
+        X = rawget(X, "baseType"); n = n + 1
+    end
+    return false
+end
+M.isA = isA
+
 local function objType(name, ot, isItem)
     local T = { _name = name, _ot = ot, _isItem = isItem }
-    T.objectIsInstance = function(o) return getmetatable(o) == OBJ and o.type == T end
+    T.objectIsInstance = function(o) return getmetatable(o) == OBJ and isA(o.type, T) end
     T.record = function(x)
         if type(x) == "table" and getmetatable(x) == OBJ then x = x.recordId end
         local o = x and tes3.getObject(x)
@@ -195,6 +212,7 @@ local function objType(name, ot, isItem)
     end
     T.records = setmetatable({}, {
         __index = function(_, i)
+            if type(i) == "string" then return T.record(i) end   -- records['id'] (OpenMW 0.49+)
             local list = M.recordList(T)
             return list[i]
         end,
@@ -232,15 +250,57 @@ function M.initTypes()
     objType("Lockpick", o.lockpick, true)
     objType("Probe", o.probe, true)
     objType("Repair", o.repairItem, true)
-    types.Player = setmetatable({ _name = "Player" }, { __index = types.NPC })
+    types.Player = setmetatable({ _name = "Player", baseType = types.NPC }, { __index = types.NPC })
     types.Player.objectIsInstance = function(x) return getmetatable(x) == OBJ and x.type == types.Player end
     local function inventory(actor) return M.inventory(actor) end
     types.NPC.inventory, types.Creature.inventory, types.Container.inventory = inventory, inventory, inventory
     types.Container.content = inventory
     types.Actor = { _name = "Actor",
-        objectIsInstance = function(x) return getmetatable(x) == OBJ and (x.type == types.NPC or x.type == types.Creature or x.type == types.Player) end,
+        objectIsInstance = function(x) return getmetatable(x) == OBJ and isA(x.type, types.Actor) end,
         inventory = inventory }
     types.Item = { _name = "Item", objectIsInstance = function(x) return getmetatable(x) == OBJ and x.type and x.type._isItem == true end }
+    types.Lockable = { _name = "Lockable", objectIsInstance = function(x) return getmetatable(x) == OBJ and isA(x.type, types.Lockable) end }
+    -- OpenMW 0.51 type hierarchy (baseType): actors -> Actor, items -> Item, containers/doors -> Lockable
+    types.NPC.baseType, types.Creature.baseType = types.Actor, types.Actor
+    types.Container.baseType, types.Door.baseType = types.Lockable, types.Lockable
+    for _, T in pairs(types) do
+        if type(T) == "table" and T._isItem then T.baseType = types.Item end
+    end
+    M.initLockable(types.Lockable)
+    -- record type enums; the values are the ESM values MWSE reports in record.type / record.slot
+    types.Weapon.TYPE = { ShortBladeOneHand = 0, LongBladeOneHand = 1, LongBladeTwoHand = 2, BluntOneHand = 3,
+        BluntTwoClose = 4, BluntTwoWide = 5, SpearTwoWide = 6, AxeOneHand = 7, AxeTwoHand = 8, MarksmanBow = 9,
+        MarksmanCrossbow = 10, MarksmanThrown = 11, Arrow = 12, Bolt = 13 }
+    types.Armor.TYPE = { Helmet = 0, Cuirass = 1, LPauldron = 2, RPauldron = 3, Greaves = 4, Boots = 5, LGauntlet = 6,
+        RGauntlet = 7, Shield = 8, LBracer = 9, RBracer = 10 }
+    types.Clothing.TYPE = { Pants = 0, Shoes = 1, Shirt = 2, Belt = 3, Robe = 4, RGlove = 5, LGlove = 6, Skirt = 7,
+        Ring = 8, Amulet = 9 }
+end
+
+---------------------------------------------------------------- Lockable (containers, doors)
+-- types.Lockable.isLocked / getLockLevel / lock / unlock / getKeyRecord -> tes3.getLocked,
+-- tes3.getLockLevel, tes3.lock, tes3.unlock and the reference's lockNode.key.
+function M.initLockable(L)
+    local function lref(o, fn)
+        local ref = refOf(o)
+        if not ref then error("types.Lockable." .. fn .. ": invalid object", 3) end
+        return ref
+    end
+    L.isLocked = function(o) return tes3.getLocked({ reference = lref(o, "isLocked") }) == true end
+    L.getLockLevel = function(o)
+        local ref = lref(o, "getLockLevel")
+        local ok, v = pcall(tes3.getLockLevel, { reference = ref })
+        if ok and v then return v end
+        local ok2, n = pcall(function() return ref.lockNode and ref.lockNode.level end)
+        return ok2 and n or 0
+    end
+    L.lock = function(o, level) tes3.lock({ reference = lref(o, "lock"), level = level }) end
+    L.unlock = function(o) tes3.unlock({ reference = lref(o, "unlock") }) end
+    L.getKeyRecord = function(o)
+        local ref = lref(o, "getKeyRecord")
+        local ok, k = pcall(function() return ref.lockNode and ref.lockNode.key end)
+        return ok and k and M.recordOf(k) or nil
+    end
 end
 
 local recordCache = {}
@@ -293,6 +353,14 @@ local recFields = {
     isPulse = function(o) return o.pulses == true end,
     isPulseSlow = function(o) return o.pulsesSlowly == true end,
     sound = function(o) return o.sound and lowerId(o.sound) or nil end,
+    -- Weapon.TYPE / Armor.TYPE / Clothing.TYPE values (ESM numbers, as MWSE reports them)
+    type = function(o)
+        local ot = tes3.objectType
+        if o.objectType == ot.weapon or o.objectType == ot.ammunition then return o.type end
+        if o.objectType == ot.armor or o.objectType == ot.clothing then return o.slot end
+        return nil
+    end,
+    enchant = function(o) return o.enchantment and lowerId(o.enchantment) or nil end,
 }
 REC.__index = function(r, k)
     local f = recFields[k]
@@ -360,16 +428,46 @@ end
 local INV = { __omwtype = "Inventory" }
 INV.__index = INV
 function M.inventory(owner) return setmetatable({ _owner = owner }, INV) end
+local function stacks(owner)
+    local ref = refOf(owner)
+    local inv = ref and ref.object and ref.object.inventory
+    if not inv then return {}, ref end
+    local out = {}
+    for _, st in pairs(inv) do
+        if st.object and (st.count or 0) > 0 then out[#out + 1] = st end
+    end
+    return out, ref
+end
 function INV:countOf(recordId)
-    local ref = refOf(self._owner)
-    if not ref or not ref.object or not ref.object.inventory then return 0 end
     local n = 0
-    for _, st in pairs(ref.object.inventory) do
+    for _, st in ipairs(stacks(self._owner)) do
         if lowerId(st.object) == normId(recordId) then n = n + (st.count or 0) end
     end
     return n
 end
 function INV:isResolved() return true end
+-- Items in an inventory are GameObjects in OpenMW. MWSE keeps item stacks, not references, so
+-- omwcompat gives one GameObject per record in the inventory (M.invItem): items of the same record
+-- with different conditions, charges or souls are one object here.
+function INV:getAll(T)
+    local out = {}
+    for _, st in ipairs(stacks(self._owner)) do
+        local IT = TYPE_BY_OT[st.object.objectType]
+        if T == nil or (IT and (IT == T or (T == types.Item and IT._isItem))) then
+            out[#out + 1] = M.invItem(self._owner, lowerId(st.object))
+        end
+    end
+    return out
+end
+function INV:find(recordId)
+    if self:countOf(recordId) > 0 then return M.invItem(self._owner, normId(recordId)) end
+    return nil
+end
+function INV:findAll(recordId)
+    local it = self:find(recordId)
+    return it and { it } or {}
+end
+function INV:resolve() error("omwcompat: Inventory:resolve is not supported (MWSE resolves levelled items itself)", 2) end
 
 ---------------------------------------------------------------- GameObject
 local function vec3(v) return util.vector3(v.x, v.y, v.z) end
@@ -411,15 +509,140 @@ local getters = {
         return ok and v or nil
     end,
     parentContainer = function() return nil end,
+    owner = function(w, ref) return ref and M.ownerOf(ref) or nil end,
+    -- MWSE does not keep a reference's original cell: exterior refs -> the cell containing
+    -- startingPosition, interior refs -> the current cell
+    startingCell = function(w, ref)
+        if not ref or not ref.cell then return nil end
+        if ref.cell.isInterior then return M.cellOf(ref.cell) end
+        local sp = ref.startingPosition or ref.position
+        local ok, c = pcall(tes3.getCell, { position = sp })
+        return M.cellOf(ok and c or ref.cell)
+    end,
+    globalVariable = function() error("omwcompat: GameObject.globalVariable is not supported (MWSE exposes no per-reference global)", 3) end,
 }
 
+---------------------------------------------------------------- ownership
+-- GameObject.owner: { recordId, factionId, factionRank } through tes3.getOwner / tes3.setOwner.
+-- factionRank is the rank index stored in the reference (MWSE requiredRank, 0-based as in the ESM).
+local function ownerInfo(ref)
+    local ok, o, req = pcall(tes3.getOwner, { reference = ref })
+    if not ok or not o then return nil, nil end
+    return o, req
+end
+function M.ownerOf(ref)
+    return setmetatable({}, {
+        __index = function(_, k)
+            local o, req = ownerInfo(ref)
+            if not o then return nil end
+            local isFaction = o.objectType == tes3.objectType.faction
+            if k == "recordId" then return (not isFaction) and lowerId(o) or nil
+            elseif k == "factionId" then return isFaction and lowerId(o) or nil
+            elseif k == "factionRank" then return isFaction and tonumber(req) or nil end
+            return nil
+        end,
+        __newindex = function(_, k, v)
+            if k == "recordId" or k == "factionId" then
+                if v == nil then tes3.setOwner({ reference = ref, remove = true })
+                else tes3.setOwner({ reference = ref, owner = v }) end
+            elseif k == "factionRank" then
+                local o = ownerInfo(ref)
+                if not o or o.objectType ~= tes3.objectType.faction then error("owner.factionRank: the object has no faction owner", 2) end
+                tes3.setOwner({ reference = ref, owner = o, requiredRank = v })
+            else
+                error("owner." .. tostring(k) .. " is not writable", 2)
+            end
+            ref.modified = true
+        end,
+    })
+end
+
+local methods_ref
+---------------------------------------------------------------- inventory items
+-- A GameObject for "the items of record R in the inventory of O". Fields: id, recordId,
+-- type, count (live), parentContainer; cell/position are nil like OpenMW items in a container.
+-- Methods: isValid, remove(n), moveInto(inventory), teleport(cell, pos) (drops it into the
+-- world). split, activateBy, setScale and local scripts are not available on them.
+local invGetters = {
+    id = function(w) return rawget(w, "_id") end,
+    recordId = function(w) return rawget(w, "_recordId") end,
+    type = function(w) local o = tes3.getObject(rawget(w, "_recordId")); return o and TYPE_BY_OT[o.objectType] or nil end,
+    count = function(w)
+        local have = M.inventory(rawget(w, "_owner")):countOf(rawget(w, "_recordId"))
+        local take = rawget(w, "_take")
+        return take and math.min(take, have) or have
+    end,
+    parentContainer = function(w) return rawget(w, "_owner") end,
+    enabled = function() return true end,
+    scale = function() return 1 end,
+    rotation = function() return util.transform.identity end,
+}
+local invMethods = {}
+function invMethods:isValid()
+    local owner = rawget(self, "_owner")
+    return owner ~= nil and owner:isValid() and self.count > 0
+end
+function invMethods:remove(n)
+    local ref = refOf(rawget(self, "_owner"))
+    if not ref then error("remove: inventory owner is not valid", 2) end
+    local have = self.count
+    if have <= 0 then return end
+    tes3.removeItem({ reference = ref, item = rawget(self, "_recordId"), count = math.min(n or have, have), playSound = false })
+end
+function invMethods:moveInto(dest)
+    if type(dest) ~= "table" or getmetatable(dest) ~= INV then error("moveInto: destination must be an Inventory", 2) end
+    local from, to = refOf(rawget(self, "_owner")), refOf(dest._owner)
+    if not from or not to then error("moveInto: inventory owner is not valid", 2) end
+    local have = self.count
+    if have <= 0 then return end
+    tes3.transferItem({ from = from, to = to, item = rawget(self, "_recordId"), count = have, playSound = false })
+end
+function invMethods:teleport(cell, pos, opts)
+    local from = refOf(rawget(self, "_owner"))
+    if not from then error("teleport: inventory owner is not valid", 2) end
+    local n, id = self.count, rawget(self, "_recordId")
+    if n <= 0 then return end
+    tes3.removeItem({ reference = from, item = id, count = n, playSound = false })
+    local w = limbo(id, n)
+    w:teleport(cell, pos, opts)
+end
+-- split(n): a view of n of these items (a new GameObject); moveInto/remove/teleport on it move n
+function invMethods:split(n)
+    n = math.floor(tonumber(n) or 0)
+    if n <= 0 or n > self.count then error("split: count must be between 1 and " .. tostring(self.count), 2) end
+    return setmetatable({ _id = rawget(self, "_id") .. ":split", _inv = true, _owner = rawget(self, "_owner"),
+        _recordId = rawget(self, "_recordId"), _take = n }, OBJ)
+end
+function invMethods:sendEvent() rt.warnOnce("inv sendEvent", "sendEvent to an item in an inventory is ignored (no local scripts there)") end
+local function invIndex(w, k)
+    local m = invMethods[k]
+    if m then return m end
+    local g = invGetters[k]
+    if g then return g(w) end
+    if methods_ref and methods_ref[k] then
+        return function() error("omwcompat: " .. tostring(k) .. " is not available for an item in an inventory", 2) end
+    end
+    return nil
+end
+function M.invItem(owner, recordId)
+    local id = "inv:" .. tostring(rawget(owner, "_id")) .. ":" .. recordId
+    local w = wrappers[id]
+    if w and rawget(w, "_inv") then return w end
+    w = setmetatable({ _id = id, _inv = true, _owner = owner, _recordId = recordId }, OBJ)
+    wrappers[id] = w
+    return w
+end
+
 local methods = {}
+methods_ref = methods
 local selfMethods = {}
 OBJ.__index = function(w, k)
+    if rawget(w, "_inv") then return invIndex(w, k) end
     if rawget(w, "_self") then
         local sm = selfMethods[k]
         if sm then return sm end
         if k == "object" then local ref = refOf(w); return ref and M.wrap(ref) or nil end
+        if k == "controls" and M.controlsOf then return M.controlsOf(w) end
     end
     local m = methods[k]
     if m then return m end
@@ -427,7 +650,21 @@ OBJ.__index = function(w, k)
     if g then return g(w, refOf(w)) end
     return nil
 end
-OBJ.__newindex = function() error("GameObject fields are read-only", 2) end
+-- writable fields (OpenMW 0.51): enabled (global scripts; "items in containers or inventories
+-- can't be disabled": ignored for them with a warning). Everything else is read-only.
+OBJ.__newindex = function(w, k, v)
+    if k == "enabled" then
+        if rawget(w, "_inv") or rawget(w, "_limbo") then
+            rt.warnOnce("enabled inv", "GameObject.enabled: items in containers or inventories can't be disabled; ignored")
+            return
+        end
+        local ref = refOf(w)
+        if not ref then error("GameObject.enabled: invalid object", 2) end
+        if v then ref:enable() else ref:disable() end
+        return
+    end
+    error("GameObject fields are read-only (" .. tostring(k) .. ")", 2)
+end
 OBJ.__tostring = function(w)
     local ref = refOf(w)
     return string.format("GameObject(%s, %s)", tostring(rawget(w, "_id") or "limbo"), tostring(w.recordId))
@@ -565,7 +802,8 @@ function methods:activateBy(actor)
     if ref and aref then aref:activate(ref) end
 end
 function methods:sendEvent(name, data) rt.sendLocalEvent(self, name, data) end
-function methods:addScript(path) error("omwcompat: addScript (CUSTOM local scripts) is not supported in this MVP", 2) end
+function methods:addScript(path, initData) return rt.addScript(self, path, initData) end
+function methods:removeScript(path) return rt.removeScript(self, path) end
 function methods:hasScript(path) return rt.hasLocalScript(self, path) end
 
 -- openmw.self: a GameObject for the object a local script is attached to, plus the

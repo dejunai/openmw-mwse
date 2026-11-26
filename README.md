@@ -76,6 +76,10 @@ All converted mods share one Mod Config Menu entry, **MW Conversions**:
 - **Then one tab per converted mod**, showing the original mod's name and author, its
   settings (if any), and that support for the conversion goes to **dej (dejunai)** via the
   Nexus Mods forums.
+- **Every mod tab starts with a "Mod enabled" switch** (on by default), also for mods that
+  have no settings. Switching it off stops that mod from the next frame, and switching it back
+  on restarts it where it left off; no reload is needed. It does not undo what the mod already
+  changed in your game. The choice applies to all your saves.
 
 ## Rights and support
 
@@ -93,12 +97,15 @@ Contact dej (dejunai) via the Nexus Mods forums for the exact wording.
 
 ## Known limits
 
-- Not provided yet: `openmw.ui`, `openmw.animation`, `openmw.ambient`, `openmw.camera`,
-  `openmw.input`, `openmw.postprocessing`, `openmw.debug`, `openmw.menu`, `openmw_aux.ui`.
-- Not hosted yet: `PLAYER`, `MENU`, `CUSTOM` (`addScript`), `LOAD` and `ITEM` scripts.
-- `openmw.nearby` has no `castRay` or pathfinding; `I.AI` only removes combat packages;
-  events sent to an object outside the active cells are dropped. See
-  [docs/GAPS.md](docs/GAPS.md).
+- Not provided yet: `openmw.animation`, `openmw.camera`, `openmw.postprocessing`,
+  `openmw.debug`, `openmw.menu`, `openmw.content`, `openmw_aux.ui`, and `openmw.ui` beyond
+  `showMessage` (no windows, layouts or HUD elements). `openmw.ambient` and `openmw.input` are
+  partial.
+- Not hosted yet: `MENU`, `LOAD` and `ITEM` scripts. `PLAYER` and `CUSTOM` (`addScript`)
+  scripts are hosted from omwcompat 0.4.0.
+- `openmw.nearby` has `castRay` but no pathfinding; `I.AI` only removes combat packages;
+  custom magic effects, active spells and effects are not available; events sent to an object
+  outside the active cells are dropped. See [docs/GAPS.md](docs/GAPS.md).
 - HUD mods (for example ammo counters and compasses) are out of scope.
 - **Shared runtime conflict:** every converted mod ships a copy of `MWSE/lib/omwcompat*`, so
   Vortex reports a file conflict between them. Let the mod with the **newest runtime** win.

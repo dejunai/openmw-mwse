@@ -117,6 +117,22 @@ def text_bytes(s: str) -> bytes:
     return s.replace("\r\n", "\n").encode("utf-8")  # UTF-8, no BOM, LF
 
 
+RUNTIME_TEXT_SUFFIXES = (".lua", ".json", ".md", ".txt", ".toml")
+
+
+def runtime_file_bytes(f: Path) -> bytes:
+    """Bytes of a bundled runtime file as written to the package. Text files are written
+    with LF line ends whatever the checkout has: a Windows clone with core.autocrlf=true
+    has CRLF in runtime/, and the package must not depend on that (0.3.0). Read and
+    written as bytes, so Python never translates newlines."""
+    data = f.read_bytes()
+    if f.suffix.lower() in RUNTIME_TEXT_SUFFIXES:
+        if data.startswith(b"\xef\xbb\xbf"):
+            data = data[3:]  # UTF-8, no BOM
+        data = data.replace(b"\r\n", b"\n")
+    return data
+
+
 # ------------------------------------------------------------------ original package (Off/<plugin>/OpenMW/)
 # Folders the original engine reads under Data Files (compared lower-case). Vanilla uses
 # "Sound" (singular); "sounds" is kept for packages that use it with OpenMW's VFS.
@@ -881,10 +897,10 @@ def build(src: Path, writer: Writer, name: str, *, data_prefix: str = "", slug: 
     for path, g in sorted(scan.guards.items()):
         res.notes.append(f"{path} runs with omwcompat guards: {', '.join(g)} (the mod's Lua is not edited)")
     if with_runtime:
-        writer.put(f"{D}MWSE/lib/omwcompat.lua", (RUNTIME_LIB / "omwcompat.lua").read_bytes())
+        writer.put(f"{D}MWSE/lib/omwcompat.lua", runtime_file_bytes(RUNTIME_LIB / "omwcompat.lua"))
         for f in sorted((RUNTIME_LIB / "omwcompat").iterdir()):
             if f.is_file():
-                writer.put(f"{D}MWSE/lib/omwcompat/{f.name}", f.read_bytes())
+                writer.put(f"{D}MWSE/lib/omwcompat/{f.name}", runtime_file_bytes(f))
 
     # alerts from the scan
     for b in scan.blockers:

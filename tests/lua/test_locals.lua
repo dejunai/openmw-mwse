@@ -89,7 +89,7 @@ rt.register({ mod = "Locals", root = SYN, scripts = {
     { flags = { "GLOBAL" }, path = "scripts/bad_global.lua" },
     { flags = { "CREATURE" }, path = "scripts/crea.lua" },
     { flags = { "ACTOR" }, path = "scripts/any_actor.lua" },
-    { flags = { "DOOR", "PLAYER" }, path = "scripts/door.lua" },
+    { flags = { "DOOR", "MENU" }, path = "scripts/door.lua" },
 } })
 mock.fire("initialized", {})
 local ext = mock.addCell({ id = "Seyda Neen", gridX = -2, gridY = -9 })
@@ -130,7 +130,7 @@ local badGlobal = false
 for _, l in ipairs(W.logs) do if l:find("bad_global.lua", 1, true) and l:find("openmw.self", 1, true) then badGlobal = true end end
 check(badGlobal, "a GLOBAL script cannot require openmw.self")
 local playerWarn = false
-for _, l in ipairs(W.logs) do if l:find("PLAYER of scripts/door.lua are not hosted", 1, true) then playerWarn = true end end
+for _, l in ipairs(W.logs) do if l:find("MENU of scripts/door.lua are not hosted", 1, true) then playerWarn = true end end
 check(playerWarn, "unhosted flags are reported, hosted flags of the same script still attach")
 check(last("globalsaw") == "kagouti", "global onActorActive still runs next to local scripts")
 

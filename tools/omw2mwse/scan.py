@@ -495,8 +495,22 @@ def typed_status(key: str, manifest: dict) -> tuple[str, dict]:
     return AT.TYPE_MEMBERS.get(typ, {}).get(name, "unlisted"), {}
 
 
+_SYMS_CACHE: dict = {}
+
+
+def scan_symbols(manifest: dict) -> dict:
+    """manifest symbols plus legacySymbols: API that OpenMW removed (so api-audit leaves it out)
+    but omwcompat still provides for older mods."""
+    key = id(manifest)
+    hit = _SYMS_CACHE.get(key)
+    if hit is None or hit[0] is not manifest:
+        hit = (manifest, {**manifest.get("legacySymbols", {}), **manifest["symbols"]})
+        _SYMS_CACHE[key] = hit
+    return hit[1]
+
+
 def classify(symbol: str, manifest: dict) -> str:
-    syms = manifest["symbols"]
+    syms = scan_symbols(manifest)
     mods = manifest["modules"]
     unsup = set(manifest["unsupportedModules"])
     parts = symbol.split(".")
@@ -525,7 +539,16 @@ def classify(symbol: str, manifest: dict) -> str:
             if syms[pref] == "unsupported" or re.fullmatch(r"[A-Z][A-Z0-9_]*", parts[k - 1]):
                 return syms[pref]
             if pref == "openmw.self.type":
-                return classify("openmw.types.Actor." + ".".join(parts[k:]), manifest)
+                # self.type is the object's own type: Actor members first, then Player (PLAYER
+                # scripts) and NPC members, which the file may legitimately use (0.3.0)
+                rest = ".".join(parts[k:])
+                st = classify("openmw.types.Actor." + rest, manifest)
+                for alt in ("Player", "NPC"):
+                    if st in ("unsupported", "unlisted"):
+                        st2 = classify(f"openmw.types.{alt}." + rest, manifest)
+                        if st2 not in ("unsupported", "unlisted"):
+                            st = st2
+                return st
             typ = AT.value_type(pref)
             if typ is None:
                 return "unlisted"
@@ -790,7 +813,9 @@ SCOPE_ALLOWS = {
     "any": {"global", "actor", "player", "object", "menu", "custom", "load"},
     "global": {"global"},
     "local": {"actor", "player", "object", "custom"},
-    "actor": {"actor", "player"},
+    # CUSTOM scripts run on whatever addScript attaches them to; the scanner cannot know, so
+    # actor-only APIs (I.AI, ...) are assumed fine there (omwcompat gives them on actors only)
+    "actor": {"actor", "player", "custom"},
     "player": {"player"},
 }
 
@@ -1092,8 +1117,55 @@ PARTIAL_NOTES = {
                             "inCombat, then the AI planner",
     "openmw.interfaces.Settings.registerRenderer": "custom renderers are accepted; the MCM shows a fallback control",
     "openmw.interfaces.Settings": "groups and pages registered by hosted scripts only",
-    "openmw.nearby": "lists references in tes3.getActiveCells() (cached per frame); castRay and other queries "
-                     "are not supported",
+    "openmw.nearby": "lists references in tes3.getActiveCells() (cached per frame); castRay/castRenderingRay via "
+                     "tes3.rayTest; other queries are not supported",
+    "openmw.nearby.castRay": "tes3.rayTest against rendered geometry, not physics shapes; collisionType and radius are "
+                             "ignored; ignore takes objects",
+    "openmw.nearby.castRenderingRay": "tes3.rayTest; options other than ignore are ignored",
+    "openmw.ui": "showMessage only (tes3.messageBox); no layouts, widgets, templates or HUD",
+    "openmw.ui.showMessage": "tes3.messageBox; options (showInDialogue) are ignored",
+    "openmw.ambient": "tes3.playSound without a reference; volume/pitch/loop passed through; timeOffset and scale "
+                      "are ignored",
+    "openmw.ambient.say": "plays the voice file; the subtitle text is not shown",
+    "openmw.ambient.streamMusic": "tes3.streamMusic; fade options are ignored",
+    "openmw.input.isSuperPressed": "always false when MWSE reports no Super key state",
+    "openmw.input.getKeyName": "the OpenMW KEY name of the scancode, not a localized key label",
+    "openmw.core.sound": "tes3.playSound/removeSound/getSoundPlaying on the object's reference; timeOffset is "
+                         "ignored; stopSay stops every sound on the reference",
+    "openmw.core.sound.say": "plays the voice file on the reference; the subtitle text is not shown",
+    "openmw.core.factions.records": "read from MWSE factions: id, name, ranks, reactions, attributes, skills; "
+                                    "factionReputation and factionReaction are both MWSE's rank reputation; hidden is false",
+    "openmw.self.owner": "tes3.getOwner/setOwner: recordId (an NPC) or factionId + factionRank (MWSE requiredRank)",
+    "openmw.self.startingCell": "the current cell for interiors, else the exterior cell at the starting position",
+    "openmw.self.addScript": "CUSTOM scripts of converted mods only; not on Statics or items in an inventory; starts "
+                             "on the next frame when the object is active; also callable from local scripts",
+    "openmw.self.removeScript": "only scripts added with addScript; their saved data is dropped, no handler is called",
+    "openmw.self.hasScript": "addScript'ed, running, or matched by the object's type flags (PLAYER on the player)",
+    "openmw.self.controls": "sneak/run/jump read the actor's current state; other controls warn; writes raise",
+    "openmw.types.*.getEquipment": "from ref.object.equipment, items placed in OpenMW slots by record type and slot",
+    "openmw.types.*.setEquipment": "mobile:equip / unequip; the actor must be active; items must be in the inventory",
+    "openmw.types.*.getStance": "mobile.castReady -> Spell, weaponReady -> Weapon, else Nothing",
+    "openmw.types.*.setStance": "sets mobile.castReady / weaponReady; the actor must be active",
+    "openmw.types.*.stats.level": "current is the record level (read-only); progress is the player's levelUpProgress",
+    "openmw.types.*.stats.skills": "getSkillStatistic / tes3.setStatistic{skill=}; damage is 0; progress for the player only",
+    "openmw.types.Lockable.getKeyRecord": "the lock node's key; nil when the object has no lock data",
+    "openmw.types.Player.setCrimeLevel": "sets mobilePlayer.bounty (rounded down, at least 0)",
+    "openmw.types.Player.quests": "stage (journal index, settable), started, finished, addJournalEntry; cannot be iterated",
+    "engineHandler:onKeyPress": "MWSE keyDown outside menus only; KEY codes are SDL scancodes mapped from DirectInput",
+    "engineHandler:onKeyRelease": "MWSE keyUp outside menus only",
+    "engineHandler:onQuestUpdate": "MWSE journal event (quest id lower-case, new index)",
+    "scriptFlag:PLAYER": "hosted on the player: self, nearby, ui (showMessage), ambient, input; onFrame, onKeyPress, "
+                         "onKeyRelease, onQuestUpdate",
+    "scriptFlag:CUSTOM": "attached with addScript; attachments and per-object data are saved",
+    # GameObject methods (looked up by bare name)
+    "sendEvent": "delivered next frame to the object's hosted local scripts; built-in ShowMessage (to the player), "
+                 "Unequip and PlaySound3d events are handled; other built-in events (Hit, ModifyStat, AddVfx, "
+                 "StartAIPackage, UI modes, ...) are not",
+    "addScript": "CUSTOM scripts of converted mods only; not on Statics or items in an inventory; starts on the next "
+                 "frame when the object is active; also callable from local scripts",
+    "removeScript": "only scripts added with addScript; their saved data is dropped, no handler is called",
+    "hasScript": "addScript'ed, running, or matched by the object's type flags (PLAYER on the player)",
+    "split": "items in an inventory only (a view of n of the stack for remove/moveInto); world objects raise",
     "openmw.self.enableAI": "sets the mobile's activeAI flag; no effect when the actor is not loaded",
     "openmw.self.startingPosition": "the reference's starting position (falls back to the current position)",
     "openmw.self.startingRotation": "the reference's starting orientation (falls back to the current one)",
@@ -1122,6 +1194,8 @@ PARTIAL_NOTES = {
     "openmw.vfs": "loose files only (BSA contents cannot be read); pathsWithPrefix lists one folder level (lfs)",
     "openmw.world.activeActors": "rebuilt from tes3.getActiveCells() on each access, player first",
     "openmw.world.cells": "only the active cells (tes3.getActiveCells())",
+    "openmw.world.mwscript.getGlobalVariables": "tes3.findGlobal(name).value; unknown names read nil, writing one "
+                                                "raises; pairs() needs MWSE's Lua 5.2 compatibility; player ignored",
     "openmw.world.mwscript.getGlobalScript": "variables via the vanilla script context (unknown names read nil, "
                                              "writing one raises); isRunning starts/stops it; player argument ignored",
     "openmw_aux.calendar.formatGameTime": "os.date on game seconds (UTC); no in-game month names",
@@ -1149,6 +1223,11 @@ def partial_note(api: str, manifest: dict) -> str:
         return best
     rt_notes = manifest.get("notes", {})
     return rt_notes.get(api) or rt_notes.get(parts[-1]) or GENERIC_PARTIAL
+
+
+def _handler_note(h: str, manifest: dict) -> str:
+    n = partial_note("engineHandler:" + h, manifest)
+    return n if n != GENERIC_PARTIAL else partial_note(h, manifest)
 
 
 def _uses(counted: list, attr: str, key: str) -> list[dict]:
@@ -1186,7 +1265,8 @@ def partial_api_uses(counted: list, symbols: dict, handlers: dict, methods: dict
                     "missing": partial_note(m, manifest)})
     for h, st in sorted(handlers.items()):
         if st == "partial":
-            out.append({"api": "engineHandler:" + h, "kind": "engineHandler", "count": 1, "uses": [], "missing": partial_note(h, manifest)})
+            out.append({"api": "engineHandler:" + h, "kind": "engineHandler", "count": 1, "uses": [],
+                        "missing": _handler_note(h, manifest)})
     for fl, st in sorted(flags.items()):
         if st == "partial":
             note = manifest.get("notes", {}).get("local scripts") if fl not in ("GLOBAL", "PLAYER", "MENU") else None

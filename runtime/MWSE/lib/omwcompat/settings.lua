@@ -71,6 +71,12 @@ end
 function M.saveConfig(modName)
     if configs[modName] then mwse.saveConfig("omwcompat_" .. modName, configs[modName]) end
 end
+-- the per-mod Enabled switch (0.4.0): "enabled" in MWSE/config/omwcompat_<Mod>.json, default on
+function M.modEnabled(modName) return configOf(modName).enabled ~= false end
+function M.setModEnabled(modName, on)
+    configOf(modName).enabled = on and true or false
+    M.saveConfig(modName)
+end
 
 local function settingOf(groupKey, key)
     local g = registry.groups[groupKey]
@@ -332,6 +338,14 @@ local function addSetting(container, g, s, L)
     return "info:custom"
 end
 
+M.TOGGLE_LABEL = "Mod enabled"   -- not "Enabled": many mods have their own setting with that name
+M.TOGGLE_NOTE = "Turns this conversion on or off. No reload is needed. "
+    .. "Off: from the next frame none of its scripts run (global, per-object and player scripts, timers, events, "
+    .. "activation handlers); their saved state is kept as it was when you switched it off. It does not undo what the mod "
+    .. "has already changed in the world. "
+    .. "On: its scripts start again from the next frame, as after loading a save. "
+    .. "The switch is stored per mod (MWSE/config/omwcompat_<mod>.json) and applies to every save."
+
 -- Add one tab (a sidebar page) for mod m to the shared "MW Conversions" template. A tab is
 -- always created: it shows the original mod, its author and the support line, then the
 -- mod's settings groups (if any) as categories. Returns a summary table.
@@ -346,10 +360,16 @@ function M.addTab(template, m, aboutLines)
     local title = c.title or m.title or m.name
     local page = template:createSideBarPage({ label = title, description = table.concat(about, "\n") })
     if page.sidebar then page.sidebar:createInfo({ text = table.concat(about, "\n") }) end
+    -- every tab starts with the Enabled switch, so a mod without settings still has one
+    page:createOnOffButton({ label = M.TOGGLE_LABEL, description = M.TOGGLE_NOTE .. "\n\nDefault: on",
+        variable = mwse.mcm.createCustom({
+            getter = function() return rt.isEnabled(m) end,
+            setter = function(_, v) rt.setEnabled(m, v) end,
+        }) })
     page:createInfo({ text = table.concat(about, "\n") })
-    local summary = { title = title, groups = {} }
+    local summary = { title = title, groups = {}, enabled = { control = "onOff", label = M.TOGGLE_LABEL, default = true } }
     if #groups == 0 then
-        page:createInfo({ text = "This mod has no settings to configure." })
+        page:createInfo({ text = "This mod has no other settings." })
         return summary
     end
     local pageKeys, pagesUsed = {}, {}

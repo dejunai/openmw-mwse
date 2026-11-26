@@ -84,9 +84,13 @@ class ScanTests(unittest.TestCase):
 
     def test_classify(self):
         self.assertEqual(classify("openmw.world.createObject", MANIFEST), "full")
-        self.assertEqual(classify("openmw.world.mwscript.getGlobalVariables", MANIFEST), "unsupported")
+        self.assertEqual(classify("openmw.world.mwscript.getGlobalVariables", MANIFEST), "partial")  # 0.4.0
+        self.assertEqual(classify("openmw.world.mwscript.startGlobalScript", MANIFEST), "unsupported")
         self.assertEqual(classify("openmw.world.doesNotExist", MANIFEST), "unsupported")
-        self.assertEqual(classify("openmw.ui.showMessage", MANIFEST), "unsupported")
+        self.assertEqual(classify("openmw.ui.showMessage", MANIFEST), "partial")
+        self.assertEqual(classify("openmw.ui.create", MANIFEST), "unsupported")
+        self.assertEqual(classify("openmw.animation.playBlended", MANIFEST), "unsupported")
+        self.assertEqual(classify("openmw.async.newRealTimer", MANIFEST), "partial")  # legacySymbols
         self.assertEqual(classify("openmw.interfaces.SomeMod.fn", MANIFEST), "interface")
         self.assertEqual(classify("openmw.types.Light", MANIFEST), "full")
         self.assertEqual(classify("openmw.core.weather.getCurrent", MANIFEST), "partial")
@@ -110,13 +114,14 @@ def _make_mod(d: Path, script_src: str = SAMPLE, flags: str = "GLOBAL"):
 class ModScanTests(unittest.TestCase):
     def test_blockers(self):
         with tempfile.TemporaryDirectory() as t:
-            _make_mod(Path(t), flags="GLOBAL, PLAYER")
+            _make_mod(Path(t), flags="GLOBAL, MENU")
             s = scan_mod(Path(t), MANIFEST)
             self.assertEqual(s.verdict, "blocked")
             text = "\n".join(s.blockers)
-            self.assertIn("openmw.world.mwscript", text)
-            self.assertIn("onKeyPress", text)
-            self.assertIn("PLAYER", text)
+            self.assertIn("MENU", text)
+            # PLAYER scripts and onKeyPress are hosted since omwcompat 0.4.0 (partial)
+            self.assertEqual(s.handlers["onKeyPress"], "partial")
+            self.assertNotIn("onKeyPress", text)
 
     def test_ltlo_reference_is_ready(self):
         ref = ROOT / "reference" / "openmw_original"
@@ -235,8 +240,10 @@ class LocalScriptScanTests(unittest.TestCase):
         self.assertEqual(classify("openmw.interfaces.AI.getActivePackage", MANIFEST), "partial")
         self.assertEqual(classify("openmw.interfaces.AI.forEachPackage", MANIFEST), "unsupported")
         self.assertEqual(classify("openmw.interfaces.SomeMod.fn", MANIFEST), "interface")
-        self.assertEqual(classify("openmw.self.controls", MANIFEST), "unsupported")
-        self.assertEqual(classify("openmw.nearby.castRay", MANIFEST), "unsupported")
+        self.assertEqual(classify("openmw.self.controls.sneak", MANIFEST), "partial")
+        self.assertEqual(classify("openmw.self.controls.movement", MANIFEST), "unsupported")
+        self.assertEqual(classify("openmw.nearby.castRay", MANIFEST), "partial")
+        self.assertEqual(classify("openmw.nearby.findPath", MANIFEST), "unsupported")
 
     def test_wildlife_19_is_ready(self):
         src = ROOT / "corpus" / "wildlife-attacks-npcs-too" / "_archive" / "full"
@@ -680,7 +687,7 @@ class PackageTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             src = Path(t) / "src"
             src.mkdir()
-            _make_mod(src)
+            _make_mod(src, flags="GLOBAL, MENU")   # MENU scripts are not hosted: blocked
             buf = io.StringIO()
             with redirect_stdout(buf):
                 rc = main(["scan", str(src), "--strict"])

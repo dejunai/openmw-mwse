@@ -88,12 +88,12 @@ for _, phrase in ipairs({ "experimental and unofficial", "retains all rights", "
     check(dtext:find(phrase, 1, true), "disclaimer says: " .. phrase)
 end
 local plainT = tpl.children[3]
-check(plainT.label == "Plain Mod" and plainT.children[1].text:find("Original author: Zed", 1, true) and plainT.children[2].text == "This mod has no settings to configure.", "a mod with nothing to configure still gets a tab with name, author and support")
+check(plainT.label == "Plain Mod" and plainT.children[1].label == "Mod enabled" and plainT.children[2].text:find("Original author: Zed", 1, true) and plainT.children[3].text == "This mod has no other settings.", "a mod with nothing to configure still gets a tab with the Enabled switch, name, author and support")
 check(tpl.children[2] == ltloT and tpl.children[4] == synT, "per-mod tabs start at tab 2, sorted by original mod name")
 check(ltloT ~= nil, "LTLO tab labelled with the original mod name")
 check(synT ~= nil, "synthetic mod tab exists (name fallback, no credits)")
 local controls = ltloT and mock.mcmControls(ltloT) or {}
-check(#controls == 11, "LTLO tab has 11 controls (got " .. #controls .. ")")
+check(#controls == 12, "LTLO tab has 11 controls plus Enabled (got " .. #controls .. ")")
 local function find(t, label) return mock.mcmFind(t, label) end
 local endH = find(ltloT, "Night ends at (hour)")
 local startH = find(ltloT, "Night starts after (hour)")
@@ -105,8 +105,8 @@ check(rain and rain.kind == "OnOffButton" and mock.mcmGet(rain) == false, "rain:
 check(endH and endH.description:find("Default: 7", 1, true) and endH.description:find("Applies immediately", 1, true), "night end description shows default and live apply")
 check(rain and rain.description:find("Applies when a save is loaded", 1, true), "rain description says it applies on reload")
 local page1 = ltloT
-local info1 = page1 and page1.children[1]
-local cat = page1 and page1.children[2]
+local info1 = page1 and page1.children[2]   -- children[1] is the Enabled switch (0.4.0)
+local cat = page1 and page1.children[3]
 check(cat and cat.label == "Tunables (hard-coded in the original)", "LTLO category label from sidecar")
 local NOTICE = "Unofficial mwsuite conversion of Leave The Lights Off (original author: OwnlyMe)"
 check(info1 and info1.kind == "Info" and info1.text:find("Original mod: Leave The Lights Off\nOriginal author: OwnlyMe", 1, true)
@@ -114,7 +114,7 @@ check(info1 and info1.kind == "Info" and info1.text:find("Original mod: Leave Th
 local sb = page1.sidebar and page1.sidebar.children[1]
 check(sb and sb.text == info1.text, "sidebar repeats the same text")
 check(page1.description:find("nexusmods.com/morrowind/mods/57510", 1, true), "tab credits the original page")
-local synInfo = synT.children[1]
+local synInfo = synT.children[2]
 check(synInfo.text:find("Original mod: Synth\nOriginal author: unknown", 1, true) and synInfo.text:find(SUPPORT, 1, true),
     "a mod without credits still names itself, 'unknown' author and the support line")
 local logged = false

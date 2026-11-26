@@ -31,8 +31,10 @@ TYPE_MEMBERS: dict[str, dict[str, str]] = {
              "gridX": "full", "gridY": "full", "worldSpaceId": "full", "hasWater": "full", "hasSky": "full",
              "isInSameSpace": "full", "getAll": "partial", "hasTag": "unsupported",
              "displayName": "unsupported", "waterLevel": "unsupported", "pathGrid": "unsupported"},
-    "Inventory": {"countOf": "full", "isResolved": "stub", "getAll": "unsupported", "find": "unsupported",
-                  "findAll": "unsupported", "resolve": "unsupported"},
+    "Inventory": {"countOf": "full", "isResolved": "stub", "getAll": "partial", "find": "partial",
+                  "findAll": "partial", "resolve": "unsupported"},
+    # GameObject.owner (0.4.0): tes3.getOwner / tes3.setOwner; factionRank is MWSE's requiredRank
+    "ObjectOwner": {"recordId": "partial", "factionId": "partial", "factionRank": "partial"},
     "StorageSection": {"get": "full", "getCopy": "full", "set": "full", "asTable": "full", "reset": "full",
                        "subscribe": "full", "removeOnExit": "stub", "setLifeTime": "stub"},
     # a string field (cell.id, object.recordId): plain Lua string methods
@@ -52,7 +54,7 @@ TYPE_METHODS: dict[str, set[str]] = {
 MEMBER_TYPES = {
     "position": "Vector3", "startingPosition": "Vector3", "rotation": "Transform",
     "startingRotation": "Transform", "cell": "Cell", "startingCell": "Cell", "object": "GameObject",
-    "parentContainer": "GameObject",
+    "parentContainer": "GameObject", "owner": "ObjectOwner",
     "id": "string", "recordId": "string", "name": "string", "region": "string", "contentFile": "string",
     "worldSpaceId": "string", "ownerRecordId": "string", "displayName": "string",
 }

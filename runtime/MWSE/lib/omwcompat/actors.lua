@@ -211,16 +211,376 @@ function M.isExpelled(actor, id)
     return false
 end
 
+
+---------------------------------------------------------------- equipment (0.4.0)
+-- EQUIPMENT_SLOT values follow OpenMW's slot order. An equipped MWSE item is put in the slot
+-- OpenMW uses for it: armor by record.slot (bracers -> gauntlet slots, shield -> CarriedLeft),
+-- clothing by record.slot (shoes -> Boots, gloves -> gauntlet slots, the first ring
+-- LeftRing and the second RightRing), arrows/bolts -> Ammunition, other weapons, lockpicks
+-- and probes -> CarriedRight, lights -> CarriedLeft. Items are inventory GameObjects.
+local SLOT = { Helmet = 0, Cuirass = 1, Greaves = 2, LeftPauldron = 3, RightPauldron = 4, LeftGauntlet = 5,
+    RightGauntlet = 6, Boots = 7, Shirt = 8, Pants = 9, Skirt = 10, Robe = 11, LeftRing = 12, RightRing = 13,
+    Amulet = 14, Belt = 15, CarriedRight = 16, CarriedLeft = 17, Ammunition = 18 }
+M.EQUIPMENT_SLOT = SLOT
+local ARMOR_SLOT = { [0] = SLOT.Helmet, SLOT.Cuirass, SLOT.LeftPauldron, SLOT.RightPauldron, SLOT.Greaves, SLOT.Boots,
+    SLOT.LeftGauntlet, SLOT.RightGauntlet, SLOT.CarriedLeft, SLOT.LeftGauntlet, SLOT.RightGauntlet }
+local CLOTHING_SLOT = { [0] = SLOT.Pants, SLOT.Boots, SLOT.Shirt, SLOT.Belt, SLOT.Robe, SLOT.RightGauntlet,
+    SLOT.LeftGauntlet, SLOT.Skirt, "ring", SLOT.Amulet }
+local function slotOf(item, ringsSeen)
+    local ot = tes3.objectType
+    local t = item.objectType
+    if t == ot.armor then return ARMOR_SLOT[item.slot] end
+    if t == ot.clothing then
+        local sl = CLOTHING_SLOT[item.slot]
+        if sl == "ring" then return ringsSeen == 0 and SLOT.LeftRing or SLOT.RightRing end
+        return sl
+    end
+    if t == ot.ammunition then return SLOT.Ammunition end
+    if t == ot.weapon then
+        if item.type == 12 or item.type == 13 then return SLOT.Ammunition end
+        return SLOT.CarriedRight
+    end
+    if t == ot.lockpick or t == ot.probe then return SLOT.CarriedRight end
+    if t == ot.light then return SLOT.CarriedLeft end
+    return nil
+end
+local function idOf(x) return type(x) == "string" and x:lower() or nil end
+function M.getEquipment(actor, slot)
+    local ref = objects.refOf(actor)
+    if not ref then error("types.Actor.getEquipment: invalid actor", 2) end
+    local out, rings = {}, 0
+    local ok, eq = pcall(function() return ref.object.equipment end)
+    if ok and eq then
+        for _, st in pairs(eq) do
+            local it = st.object
+            if it then
+                local sl = slotOf(it, rings)
+                if sl == SLOT.LeftRing or sl == SLOT.RightRing then rings = rings + 1 end
+                if sl and out[sl] == nil then out[sl] = objects.invItem(objects.wrap(ref), idOf(it.id)) end
+            end
+        end
+    end
+    if slot ~= nil then return out[slot] end
+    return out
+end
+function M.hasEquipped(actor, item)
+    local want = type(item) == "string" and item:lower() or (item and item.recordId)
+    for _, it in pairs(M.getEquipment(actor)) do if it.recordId == want then return true end end
+    return false
+end
+-- setEquipment: only on an active actor (it needs the mobile): items no longer listed are
+-- unequipped (mobile:unequip), listed ones equipped from the inventory (mobile:equip). An item
+-- that is not in the inventory raises, as in OpenMW.
+function M.setEquipment(actor, tbl)
+    if type(tbl) ~= "table" then error("types.Actor.setEquipment: equipment must be a table", 2) end
+    local mob, ref = mobileOf(actor)
+    if not ref then error("types.Actor.setEquipment: invalid actor", 2) end
+    if not mob then error("types.Actor.setEquipment: the actor is not active", 2) end
+    local cur = M.getEquipment(actor)
+    local want = {}
+    for sl, v in pairs(tbl) do
+        local id = type(v) == "string" and v:lower() or (type(v) == "table" and v.recordId) or nil
+        if not id then error("types.Actor.setEquipment: slot " .. tostring(sl) .. " needs a GameObject or a record id", 2) end
+        want[sl] = id
+    end
+    for sl, it in pairs(cur) do
+        if want[sl] ~= it.recordId then mob:unequip({ item = it.recordId }) end
+    end
+    for sl, id in pairs(want) do
+        if not (cur[sl] and cur[sl].recordId == id) then
+            if objects.inventory(actor):countOf(id) <= 0 then
+                error("types.Actor.setEquipment: " .. id .. " is not in the actor's inventory", 2)
+            end
+            mob:equip({ item = id })
+        end
+    end
+end
+
+---------------------------------------------------------------- stance (0.4.0)
+-- STANCE.Nothing/Weapon/Spell <-> mobile.weaponReady / mobile.castReady.
+local STANCE = { Nothing = 0, Weapon = 1, Spell = 2 }
+M.STANCE = STANCE
+function M.getStance(actor)
+    local mob = mobileOf(actor)
+    if not mob then return STANCE.Nothing end
+    local ok, cast = pcall(function() return mob.castReady end)
+    if ok and cast then return STANCE.Spell end
+    local ok2, wpn = pcall(function() return mob.weaponReady end)
+    if ok2 and wpn then return STANCE.Weapon end
+    return STANCE.Nothing
+end
+function M.setStance(actor, stance)
+    local mob = mobileOf(actor)
+    if not mob then error("types.Actor.setStance: the actor is not active", 2) end
+    if stance ~= STANCE.Nothing and stance ~= STANCE.Weapon and stance ~= STANCE.Spell then
+        error("types.Actor.setStance: unknown stance " .. tostring(stance), 2)
+    end
+    if stance == STANCE.Spell then mob.weaponReady = false; mob.castReady = true
+    elseif stance == STANCE.Weapon then mob.castReady = false; mob.weaponReady = true
+    else mob.castReady = false; mob.weaponReady = false end
+end
+
+---------------------------------------------------------------- level and skills (0.4.0)
+-- stats.level(actor): current = the actor's level (read-only here); progress = the player's
+-- levelUpProgress (0 for other actors).
+local function levelStat(actor)
+    local mob, ref = mobileOf(actor)
+    if not ref then error("types.Actor.stats.level: invalid actor", 2) end
+    return setmetatable({}, {
+        __index = function(_, k)
+            if k == "current" then
+                local ok, v = pcall(function() return ref.object.level end)
+                if ok and v then return v end
+                local b = baseObject(ref); return b and b.level or 1
+            elseif k == "progress" then
+                if ref == tes3.player and tes3.mobilePlayer then return tes3.mobilePlayer.levelUpProgress or 0 end
+                return 0
+            end
+            return nil
+        end,
+        __newindex = function(_, k) error("omwcompat: stats.level." .. tostring(k) .. " is not writable", 2) end,
+    })
+end
+-- OpenMW skill ids -> tes3.skill ids
+local SKILLS = { block = 0, armorer = 1, mediumarmor = 2, heavyarmor = 3, bluntweapon = 4, longblade = 5, axe = 6,
+    spear = 7, athletics = 8, enchant = 9, destruction = 10, alteration = 11, illusion = 12, conjuration = 13,
+    mysticism = 14, restoration = 15, alchemy = 16, unarmored = 17, security = 18, sneak = 19, acrobatics = 20,
+    lightarmor = 21, shortblade = 22, marksman = 23, mercantile = 24, speechcraft = 25, handtohand = 26 }
+M.SKILLS = SKILLS
+local function skillStat(key)
+    local sid = SKILLS[key]
+    return function(actor)
+        local _, ref = mobileOf(actor)
+        if not ref then error("types.NPC.stats.skills." .. key .. ": invalid actor", 2) end
+        local function st()
+            local m2 = mobileOf(actor)
+            if not m2 then return nil end
+            local ok, v = pcall(function() return m2:getSkillStatistic(sid) end)
+            return ok and v or nil
+        end
+        local function recordBase()
+            local b = baseObject(ref)
+            local ok, v = pcall(function() return b.skills[sid + 1] end)
+            return ok and v or 0
+        end
+        return setmetatable({}, {
+            __index = function(_, k)
+                local s = st()
+                if k == "base" then return s and s.base or recordBase()
+                elseif k == "modified" then return s and s.current or recordBase()
+                elseif k == "modifier" then return s and (s.current - s.base) or 0
+                elseif k == "damage" then return 0
+                elseif k == "progress" then
+                    local mp = tes3.mobilePlayer
+                    if ref ~= tes3.player or not mp then return 0 end
+                    local ok, v = pcall(function()
+                        local need = mp:getSkillProgressRequirement(sid)
+                        return need and need > 0 and (mp.skillProgress[sid + 1] or 0) / need or 0
+                    end)
+                    return ok and v or 0
+                end
+                return nil
+            end,
+            __newindex = function(_, k, v)
+                local r = objects.refOf(actor)
+                if not r then error("types.NPC.stats.skills." .. key .. ": invalid actor", 2) end
+                if k == "base" then tes3.setStatistic({ reference = r, skill = sid, base = v })
+                elseif k == "modifier" then
+                    local s = st()
+                    tes3.setStatistic({ reference = r, skill = sid, current = (s and s.base or recordBase()) + v })
+                else error("omwcompat: skill field " .. tostring(k) .. " is not writable", 2) end
+            end,
+        })
+    end
+end
+
+---------------------------------------------------------------- controls (0.4.0, read-only)
+-- self.controls: sneak/run/jump read the actor's current state (mobile.isSneaking, isRunning,
+-- isJumping); OpenMW's controls are inputs a script can set, which omwcompat does not emulate.
+local CONTROLS = { sneak = "isSneaking", run = "isRunning", jump = "isJumping" }
+function M.controlsOf(selfObj)
+    return setmetatable({}, {
+        __index = function(_, k)
+            local f = CONTROLS[k]
+            if not f then
+                rt.warnOnce("controls." .. tostring(k), "self.controls.%s is not supported by omwcompat %s", tostring(k), rt.VERSION)
+                return nil
+            end
+            local mob = mobileOf(selfObj)
+            local ok, v = pcall(function() return mob and mob[f] end)
+            return ok and v == true or false
+        end,
+        __newindex = function(_, k)
+            error("omwcompat: self.controls." .. tostring(k) .. " cannot be set (controls are read-only in omwcompat)", 2)
+        end,
+    })
+end
+
+---------------------------------------------------------------- player (0.4.0)
+local function playerOnly(actor, fn)
+    local ref = objects.refOf(actor)
+    if not ref or ref ~= tes3.player then error("types.Player." .. fn .. ": not the player", 3) end
+    return ref
+end
+function M.isCharGenFinished(p)
+    playerOnly(p, "isCharGenFinished")
+    local g = tes3.findGlobal("CharGenState")
+    return g ~= nil and g.value == -1
+end
+function M.getCrimeLevel(p)
+    playerOnly(p, "getCrimeLevel")
+    return tes3.mobilePlayer and tes3.mobilePlayer.bounty or 0
+end
+function M.setCrimeLevel(p, n)
+    playerOnly(p, "setCrimeLevel")
+    if tes3.mobilePlayer then tes3.mobilePlayer.bounty = math.max(0, math.floor(tonumber(n) or 0)) end
+end
+-- types.Player.addTopic(player, topicId) -> tes3.addTopic
+function M.addTopic(p, topicId)
+    playerOnly(p, "addTopic")
+    if type(topicId) ~= "string" then error("types.Player.addTopic: topicId must be a string", 2) end
+    tes3.addTopic({ topic = topicId })   -- false when the player already knows it (not an error)
+end
+function M.isWerewolf(actor)
+    local mob = mobileOf(actor)
+    local ok, v = pcall(function() return mob and mob.werewolf end)
+    return ok and v == true
+end
+-- types.Player.quests(player)[id]: stage (tes3.getJournalIndex / tes3.setJournalIndex), started
+-- (stage > 0), finished (the journal entry at the current stage has the Finished flag),
+-- addJournalEntry(stage[, actor]) (tes3.updateJournal). Iterating all quests is not supported.
+local function questFinished(id, stage)
+    if stage <= 0 then return false end
+    local ok, r = pcall(function()
+        local d = tes3.findDialogue({ topic = id, type = tes3.dialogueType and tes3.dialogueType.journal or 4 })
+        if not d then return false end
+        for _, info in ipairs(d.info or {}) do
+            if info.disposition == stage and info.isQuestFinished then return true end
+        end
+        return false
+    end)
+    return ok and r == true
+end
+function M.quests(p)
+    playerOnly(p, "quests")
+    return setmetatable({}, {
+        __index = function(_, qid)
+            if type(qid) ~= "string" then return nil end
+            local id = qid:lower()
+            local Q = {}
+            function Q.addJournalEntry(_, stage, actor)
+                local aref = actor and objects.refOf(actor) or nil
+                tes3.updateJournal({ id = id, index = stage, speaker = aref and aref.object or nil })
+            end
+            return setmetatable(Q, {
+                __index = function(_, k)
+                    local stage = tes3.getJournalIndex({ id = id }) or 0
+                    if k == "id" then return id
+                    elseif k == "stage" then return stage
+                    elseif k == "started" then return stage > 0
+                    elseif k == "finished" then return questFinished(id, stage) end
+                    return nil
+                end,
+                __newindex = function(_, k, v)
+                    if k == "stage" then tes3.setJournalIndex({ id = id, index = v })
+                    else error("omwcompat: quest." .. tostring(k) .. " is not writable", 2) end
+                end,
+            })
+        end,
+        __pairs = function() error("omwcompat: iterating types.Player.quests is not supported", 2) end,
+    })
+end
+
+---------------------------------------------------------------- faction records (0.4.0)
+-- core.factions.records[id or index] -> { id, name, ranks, reactions, attributes, skills, hidden }.
+-- Read from MWSE's tes3faction: ranks[i] = { name, attributeValues, primarySkillValue,
+-- favouredSkillValue, factionReputation, factionReaction }; hidden is always false (MWSE has no flag).
+local ATTR_NAMES = { [0] = "strength", "intelligence", "willpower", "agility", "speed", "endurance", "personality", "luck" }
+local SKILL_NAMES = {}
+for k, v in pairs(SKILLS) do SKILL_NAMES[v] = k end
+local factionCache = {}
+-- plain tables (LuaJIT does not honour __len/__ipairs on proxies, and mods use # and ipairs)
+local function readOnly(t) return t end
+local function factionRecord(f)
+    local id = lowerId(f.id)
+    local cached = factionCache[id]
+    if cached and cached._f == f then return cached end
+    local ranks = {}
+    local ok, rl = pcall(function() return f.ranks end)
+    for i, r in ipairs(ok and rl or {}) do
+        local nameOk, nm = pcall(function() return f:getRankName(i - 1) end)
+        local attrs = {}
+        for j, a in ipairs(r.attributes or {}) do attrs[j] = a end
+        local rep = r.reputation
+        ranks[i] = readOnly({ name = nameOk and nm or nil, attributeValues = readOnly(attrs), primarySkillValue = r.skill,
+            favouredSkillValue = r.favoredSkill, factionReputation = rep, factionReaction = rep })
+    end
+    local reactions = {}
+    local okR, rr = pcall(function() return f.reactions end)
+    for _, x in ipairs(okR and rr or {}) do
+        if x.faction then reactions[lowerId(x.faction.id)] = x.reaction end
+    end
+    local attributes, skills = {}, {}
+    local okA, al = pcall(function() return f.attributes end)
+    for _, a in ipairs(okA and al or {}) do attributes[#attributes + 1] = ATTR_NAMES[a] end
+    local okS, sl = pcall(function() return f.skills end)
+    for _, sk in ipairs(okS and sl or {}) do if SKILL_NAMES[sk] then skills[#skills + 1] = SKILL_NAMES[sk] end end
+    local rec = readOnly({ id = id, name = f.name, ranks = readOnly(ranks), reactions = readOnly(reactions),
+        attributes = readOnly(attributes), skills = readOnly(skills), hidden = false })
+    rec._f = f
+    factionCache[id] = rec
+    return rec
+end
+function M.factionsModule()
+    local records = setmetatable({}, {
+        __index = function(_, k)
+            if type(k) == "string" then
+                local want = k:lower()
+                for _, f in ipairs(factionList() or {}) do if lowerId(f.id) == want then return factionRecord(f) end end
+                return nil
+            elseif type(k) == "number" then
+                local f = (factionList() or {})[k]
+                return f and factionRecord(f) or nil
+            end
+            return nil
+        end,
+        __len = function() return #(factionList() or {}) end,
+        __newindex = function() error("core.factions.records is read-only", 2) end,
+    })
+    return { records = records }
+end
+
 function M.extendTypes(types)
     local stats = { dynamic = {}, attributes = {}, ai = {} }
     for k in pairs(DYNAMIC) do stats.dynamic[k] = dynamicStat(k) end
     for _, k in ipairs(ATTRIBUTES) do stats.attributes[k] = attributeStat(k) end
     for k in pairs(AISTATS) do stats.ai[k] = aiStat(k) end
-    for _, T in ipairs({ types.Actor, types.NPC, types.Creature }) do
+    local npcStats = setmetatable({ skills = {} }, { __index = stats })
+    for k in pairs(SKILLS) do npcStats.skills[k] = skillStat(k) end
+    stats.level = levelStat
+    for _, T in ipairs({ types.Actor, types.NPC, types.Creature, types.Player }) do
         if T then
-            T.stats = stats
+            rawset(T, "stats", (T == types.NPC or T == types.Player) and npcStats or stats)
             T.isDead = M.isDead
+            T.EQUIPMENT_SLOT = SLOT
+            T.STANCE = STANCE
+            T.getEquipment = M.getEquipment
+            T.setEquipment = M.setEquipment
+            T.hasEquipped = M.hasEquipped
+            T.equipment = M.getEquipment     -- pre-0.49 name, still used by mods
+            T.getStance = M.getStance
+            T.setStance = M.setStance
         end
+    end
+    for _, T in ipairs({ types.NPC, types.Player }) do
+        if T then T.isWerewolf = M.isWerewolf end
+    end
+    if types.Player then
+        types.Player.isCharGenFinished = M.isCharGenFinished
+        types.Player.getCrimeLevel = M.getCrimeLevel
+        types.Player.addTopic = M.addTopic
+        types.Player.setCrimeLevel = M.setCrimeLevel
+        types.Player.quests = M.quests
     end
     for _, T in ipairs({ types.NPC, types.Player }) do
         if T then
@@ -267,10 +627,45 @@ local function collect(kind)
 end
 M.collectNearby = collect
 
+-- nearby.castRay / castRenderingRay -> tes3.rayTest. MWSE tests rendered geometry, which is
+-- what castRenderingRay does; castRay (physics shapes) is approximated by it: collisionType and
+-- radius are ignored. Result: { hit, hitPos, hitNormal, hitObject }.
+local function vecArgs(v) return v.x, v.y, v.z end
+local function tvec(x, y, z)
+    if tes3vector3 and tes3vector3.new then return tes3vector3.new(x, y, z) end
+    return { x, y, z }
+end
+local function castRay(from, to, o)
+    local fx, fy, fz = vecArgs(from)
+    local tx, ty, tz = vecArgs(to)
+    local dx, dy, dz = tx - fx, ty - fy, tz - fz
+    local len = math.sqrt(dx * dx + dy * dy + dz * dz)
+    if len == 0 then return { hit = false } end
+    local ignore = {}
+    local ig = o and o.ignore
+    if ig then
+        local list = (getmetatable(ig) == objects.OBJ) and { ig } or ig
+        for _, x in ipairs(list) do local r = objects.refOf(x); if r then ignore[#ignore + 1] = r end end
+    end
+    local ok, r = pcall(tes3.rayTest, { position = tvec(fx, fy, fz), direction = tvec(dx / len, dy / len, dz / len),
+        maxDistance = len, ignore = ignore })
+    if not ok or not r or not r.intersection then return { hit = false } end
+    local U = rt.util
+    local p, n = r.intersection, r.normal
+    return { hit = true, hitPos = U.vector3(p.x, p.y, p.z), hitNormal = n and U.vector3(n.x, n.y, n.z) or nil,
+        hitObject = r.reference and objects.wrap(r.reference) or nil }
+end
+M.castRay = castRay
+
 function M.nearbyModule()
     return setmetatable({}, {
         __index = function(_, k)
             if NEARBY[k] then return collect(k) end
+            if k == "castRay" or k == "castRenderingRay" then return castRay end
+            if k == "COLLISION_TYPE" then
+                return { World = 1, Door = 2, Actor = 4, HeightMap = 8, Projectile = 16, Water = 32, Default = 31,
+                    AnyPhysical = 63, Camera = 64, VisualOnly = 128 }
+            end
             if k == "players" then return tes3.player and { objects.wrap(tes3.player) } or {} end
             rt.warnOnce("openmw.nearby." .. tostring(k), "openmw.nearby.%s is not supported by omwcompat %s", tostring(k), rt.VERSION)
             return nil

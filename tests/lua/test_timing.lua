@@ -1,4 +1,4 @@
--- omwcompat 0.3.2: per-script timing counters (omwcompat.timing), the optional periodic log
+-- omwcompat 0.3.2+: per-script timing counters (omwcompat.timing), the optional periodic log
 -- line, cheap repeated errors (one traceback per `where`), and types.NPC.getFactions /
 -- getFactionRank / isExpelled.
 -- Run from staging/LeaveTheLightsOff via tests/run_lua_tests.sh.
@@ -79,7 +79,7 @@ section("timing counters")
 local T = rt.timing
 check(type(T.snapshot) == "function" and rt.getTimings == T.snapshot, "omwcompat.timing.snapshot / omwcompat.getTimings exist")
 local snap = T.snapshot()
-check(snap.version == "0.3.2" and snap.enabled == true, "snapshot: version and enabled")
+check(snap.version == rt.VERSION and snap.enabled == true, "snapshot: version and enabled")
 check(snap.clock == "os.clock" or snap.clock == "QueryPerformanceCounter", "clock source: " .. tostring(snap.clock))
 check(snap.frame.frames == 10, "10 frames counted (" .. snap.frame.frames .. ")")
 check(snap.frame.total >= 0 and snap.frame.max >= 0, "frame total/max present")
@@ -106,7 +106,7 @@ check(bd and bd.calls == 5, "Busy onUpdate: 5 calls in the window")
 local other = T.delta("someoneElse")
 check(other.frame.frames == 15, "another consumer's first window is independent (15 frames)")
 local line = T.line("hangwatch", 3)
-check(line:find("^omwcompat 0%.3%.2: [%d%.]+ ms/frame over 0 frames") ~= nil, "line(): " .. line)
+check(line:find("^omwcompat " .. rt.VERSION:gsub("%.", "%%.") .. ": [%d%.]+ ms/frame over 0 frames") ~= nil, "line(): " .. line)
 mock.frames(2, 0.1)
 line = T.line("hangwatch", 3)
 check(line:find("over 2 frames", 1, true) and line:find("Busy scripts/busy.lua onUpdate", 1, true) ~= nil, "line() lists the top handlers: " .. line)
@@ -122,7 +122,7 @@ while os.clock() - t0 < 0.002 do end
 mock.frames(1, 0.1)
 while os.clock() - t0 < 0.004 do end
 mock.frames(1, 0.1)
-check(#logsWith("[omwcompat 0.3.2] timing: omwcompat 0.3.2:", from) >= 1, "a timing line goes to MWSE.log")
+check(#logsWith("[omwcompat " .. rt.VERSION .. "] timing: omwcompat " .. rt.VERSION .. ":", from) >= 1, "a timing line goes to MWSE.log")
 W.config = { omwcompat = { timing = false, timingLogSeconds = 0 } }
 rt.loadTimingConfig()
 local calls = (function() for _, e in ipairs(T.snapshot().scripts) do if e.mod == "Busy" and e.handler == "onUpdate" then return e.calls end end end)()

@@ -122,6 +122,34 @@ bin/omw2mwse scan path/to/mod --no-openmw             # scan without the catalog
   modeled on common OpenMW Lua patterns) and `tests/py/test_apiaudit.py` (parse, layouts,
   lookup, fetch with a fake downloader, audit, CLI, scan with a catalog; no network).
 
+## omwcompat 0.4.0 / omw2mwse 0.3.0: hosting, the Enabled switch, line ends
+
+- **Where things are.** `runtime.lua`: CUSTOM/PLAYER hosting (`attachLocal(ref, onlyMod)`,
+  `startLocal`, `RT.addScript` / `removeScript` / `hasLocalScript`, `state.attached`,
+  `state.playerInst`), player handlers (`RT.playerHandlers`, `RT.onKey`, `RT.onJournal`),
+  built-in local events (`BUILTIN_LOCAL`), `world.mwscript.getGlobalVariables`, and the switch
+  (`encodeMod` / `loadMod` used by save/load, `freezeMod` / `resumeMod`, `RT.setEnabled`).
+  `settings.lua`: `modEnabled` / `setModEnabled` and the switch at the top of `addTab`.
+  `objects.lua`: `Lockable`, `owner`, `startingCell`, the `enabled` setter, inventory items
+  (`invItem`, `inv:` ids rebuilt by `fromId`), `addScript` methods. `actors.lua`: equipment,
+  stance, level, skills, controls, Player functions, `core.factions`, `castRay`. `player.lua`:
+  KEY table (OpenMW names, SDL scancodes, DirectInput codes), `ui` / `ambient` / `input` /
+  `core.sound` modules.
+- **API facts** come only from the OpenMW 0.51.0 stubs (local, git-ignored cache) and the OpenMW
+  docs ("Events" for `ShowMessage` / `Unequip` / `PlaySound3d`); MWSE facts from the MWSE docs.
+- **Manifest.** New hosted APIs need a manifest status, a `PARTIAL_NOTES` text in `scan.py` for
+  every `partial` one (`test_every_partial_symbol_has_a_specific_note` checks), and a Lua test.
+  API removed from OpenMW but still provided goes to `legacySymbols` (scanner yes, audit no).
+- **Line ends.** `build.runtime_file_bytes` writes `.lua/.json/.md/.txt/.toml` runtime files
+  with LF and no BOM (`tests/py/test_v030.py` packages from a CRLF copy of the runtime). The
+  repository itself has no `.gitattributes`; a Windows clone with `core.autocrlf=true` keeps
+  CRLF in the work tree, which is fine now.
+- **Tests.** `tests/lua/test_v040.lua` (every new API, the switch off/on mid-game and across
+  save/load, CUSTOM persistence, PLAYER handlers, built-in events), `tests/lua/mock_mwse.lua`
+  (messageBox, sounds, items, locks, owners, journal, factions, rayTest, input, equip/unequip,
+  skills), `tests/py/test_v030.py`. `tests/run_lua_tests.sh` rebuilds the git-ignored test
+  staging `staging/LeaveTheLightsOff` whenever `runtime/` changed.
+
 ## Further reading
 
 - [RUNTIME.md](RUNTIME.md): how the emulation works, local scripts, object-lifecycle rules.

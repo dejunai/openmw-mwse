@@ -1,7 +1,7 @@
 # omwcompat runtime
 
 omwcompat is an MWSE Lua library at `Data Files/MWSE/lib/omwcompat.lua` plus `omwcompat/`.
-It runs OpenMW GLOBAL scripts unmodified. Version 0.1.0 (MVP).
+It runs OpenMW GLOBAL, object-attached, CUSTOM and PLAYER scripts unmodified. Version 0.4.0.
 
 ## Layout
 
@@ -12,7 +12,8 @@ It runs OpenMW GLOBAL scripts unmodified. Version 0.1.0 (MVP).
 | `omwcompat/objects.lua` | GameObject, Cell, Record and Inventory wrappers, `openmw.types`, lifecycle rules R1-R3. |
 | `omwcompat/serial.lua` | Serializer for OpenMW "serializable data" into one Lua-literal string. |
 | `omwcompat/util.lua` | `openmw.util`: vectors, transforms, colors, helpers. |
-| `omwcompat/actors.lua` | Actor APIs: stats, `isDead`, factions (0.3.2), `openmw.nearby`, `I.AI`. |
+| `omwcompat/actors.lua` | Actor APIs: stats, `isDead`, factions (0.3.2), `openmw.nearby`, `I.AI`; equipment, stance, level, skills, controls, Player quests, `core.factions`, `castRay` (0.4.0). |
+| `omwcompat/player.lua` | PLAYER-script modules `openmw.ui` (showMessage), `openmw.ambient`, `openmw.input`, `core.sound`, key events (0.4.0). |
 | `omwcompat/guards.lua` | Rule-based guards `activeDedupe` / `safeIteration` (0.3.2). |
 | `omwcompat/timing.lua` | Per-script handler timing counters (0.3.2). |
 | `omwcompat/manifest.json` | Support status of each symbol. The `omw2mwse scan` command reads it. |
@@ -52,6 +53,7 @@ The complete original package is `Off/<Mod>/OpenMW/<original paths>`.
   3. Flush the `onObjectActive` / `onActorActive` / `onItemActive` queue.
   4. Tick the timers.
   5. Call `onUpdate(dt)`. `dt` is 0 in menu mode, which matches OpenMW's paused world.
+  6. Local scripts' `onUpdate(dt)`, then PLAYER scripts' `onFrame(dt)` with the real frame time (also while paused, 0.4.0).
 - `referenceActivated` queues `onObjectActive`. Tombstoned, disabled and deleted references are skipped.
 - Every handler runs inside `xpcall`. Errors go to MWSE.log, at most 5 per site; only the
   first error of a site gets a `debug.traceback` (0.3.2), later ones are logged with the
@@ -85,9 +87,35 @@ falling back to the record when the actor is not loaded.
 The scanner checks the same scopes: `openmw.self`/`openmw.nearby` in a GLOBAL script,
 `openmw.world` in a local script, or `I.AI` outside an actor script is a blocker.
 
+## CUSTOM and PLAYER scripts (0.4.0)
+
+- **CUSTOM.** `obj:addScript(path, initData)` takes a CUSTOM script of any converted mod. The
+  attachment is saved (`omwcompat_rt.attached`, by persistent object id). The script starts on
+  the next frame if the object is active, with `onInit(initData)`, otherwise when it becomes
+  active; after that it is an ordinary local script (`onSave`/`onLoad`, timers, events).
+  `removeScript` drops it with its saved data, without calling a handler.
+- **PLAYER.** PLAYER scripts are local scripts on `tes3.player` (object id `player`, stable
+  across saves), attached on load. They also get `openmw.ui`, `openmw.ambient` and
+  `openmw.input`, and the handlers `onFrame`, `onKeyPress` / `onKeyRelease` (MWSE `keyDown` /
+  `keyUp`, outside menus) and `onQuestUpdate` (MWSE `journal`).
+- **Built-in events.** `obj:sendEvent` reaches the object's local scripts; afterwards, unless a
+  handler returned `false`, the runtime handles OpenMW's documented built-in `ShowMessage` (to
+  the player), `Unequip` and `PlaySound3d` events.
+
+## Per-mod Enabled switch (0.4.0)
+
+`settings.addTab` puts a **Mod enabled** on/off switch first on every mod's MCM tab;
+`RT.setEnabled(m, on)` stores it (`settings.setModEnabled`, `MWSE/config/omwcompat_<Mod>.json`).
+Off: `freezeMod` encodes the mod's state like a save into `m.frozen`, marks its scripts dead and
+drops its timers, activation handlers and subscribers. On: `resumeMod` runs on the next frame and
+starts the mod from `m.frozen` like a load (`loadMod`), attaches its local scripts to active
+objects (`attachLocal(ref, m)`) and calls its active-object handlers. While off, `onSave` writes
+`m.frozen` back and `onLoaded` keeps the save's string without starting the mod. Behaviour and
+limits: [GAPS.md](GAPS.md#per-mod-enabled-switch-040).
+
 ## Runtime version check (0.3.1)
 
-Each generated `main.lua` declares the omwcompat it was built with (`local BUILT_FOR = "0.3.2"`,
+Each generated `main.lua` declares the omwcompat it was built with (`local BUILT_FOR = "0.4.0"`,
 also passed to `register` as `runtimeVersion`). Vortex deploys one copy of the shared
 `MWSE/lib/omwcompat` files, so a mod may run on a different runtime. When `omwcompat.VERSION`
 differs, `main.lua` writes exactly one line to MWSE.log, e.g.
@@ -155,11 +183,13 @@ share of each second in `mwhangwatch.log`.
 - On MWSE `save`, each script's `onSave()` result is serialized into a single string:
   `tes3.player.data["omwcompat_<Mod>"]`. Saved timers and storage sections go in the same string.
 - Runtime state is stored in `tes3.player.data.omwcompat_rt`. It holds the generated record models,
-  the id counter and the tombstones.
+  the id counter, the tombstones and (0.4.0) the CUSTOM scripts attached with `addScript`.
+- A mod switched off keeps its last string unchanged (0.4.0).
 - Each value is a string primitive, so a nested table is never assigned into `.data`. The MWSE
   storing-data guide warns against that.
 - The serializer accepts plain tables, numbers (including inf and nan), strings and booleans. It also
-  accepts `util` vectors, transforms and colors, and GameObjects, which are stored by id.
+  accepts `util` vectors, transforms and colors, and GameObjects, which are stored by id
+  (inventory items as `inv:<owner id>:<record id>`, rebuilt as inventory items on load; 0.4.0).
 - Like OpenMW, it rejects functions, custom metatables, and shared or cyclic tables.
 - Decoding runs `loadstring` in an environment that holds only the tag constructors.
 - Timers are kept in omwcompat's own queue and not in MWSE timers, because MWSE cancels its timers

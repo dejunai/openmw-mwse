@@ -358,8 +358,8 @@ New scan rules that can add blockers to `convert` and `scan` (both, with or with
   `unsupported method Inventory:getAll (1x)` (alert `blocker` in `convert`). Partial ones are
   `partialApis` entries with `"kind": "typedMethod"` and `api` `Type:method` (`Cell:getAll`),
   `?:method` (receiver unknown, distinctive names only) or `Type.createRecordDraft`.
-- Members of `openmw.self.type` are judged as `openmw.types.Actor.*` (so `self.type.getEquipment`
-  is reported as the unsupported API it is), and members of a value are judged by the value's
+- Members of `openmw.self.type` are judged as `openmw.types.Actor.*` (`self.type.getEquipment`
+  is `partial` since 0.3.0), and members of a value are judged by the value's
   type (`openmw.self.cell.hasTag` is unsupported).
 
 New keys on every `scan --json` result (`convert` results keep their 0.2.4 keys plus the new
@@ -413,11 +413,42 @@ blockers and partial entries above):
 - `typeMembers`: per value type, `missing` and `stale`. `interfaces`: `openmw`, `ours`,
   `missing`, `notListed`. `notes`: what the audit does not cover.
 
+## omw2mwse 0.3.0 / omwcompat 0.4.0
+
+All additive: no key was removed or renamed, `verdict` and exit codes keep their meaning. Tidy
+needs no change. What tidy will see:
+
+- **More mods convert.** PLAYER and CUSTOM scripts are hosted (`scriptFlags` `partial`), so their
+  "script flag ... not hosted" blocker is gone; `ui.showMessage`, `ambient`, `input`, the
+  `onFrame` / `onKeyPress` / `onKeyRelease` / `onQuestUpdate` handlers, `addScript` /
+  `removeScript` / `hasScript`, `Inventory:getAll/find/findAll`, equipment, stance, skills,
+  `core.factions`, `core.sound`, `castRay`, `Player.quests` / `addTopic`,
+  `world.mwscript.getGlobalVariables` and `Lockable` are `partial` or `full`. Each partial one
+  is a `partialApis` entry with its note (`kind` `symbol`, `method`, `typedMethod`,
+  `engineHandler` or `scriptFlag`). In the 25-mod test corpus, 5 more mods are `ready`.
+- **Still blockers:** MENU and LOAD scripts, `ui` layouts / widgets / templates (`ui.create`,
+  `ui.content`, `I.MWUI`), `openmw.animation` and `I.AnimationController`, `camera`,
+  `postprocessing`, `menu`, `content`, magic effects / `activeEffects` / `activeSpells`,
+  `onTeleported`, `Inventory:resolve`, `GameObject.globalVariable`.
+- CUSTOM scripts may use actor-only APIs (`I.AI`) without a scope blocker, since the scanner
+  cannot know what they get attached to (omwcompat provides them on actors only).
+- Manifest: `legacySymbols` (new key) lists API that OpenMW 0.51 removed but omwcompat still
+  provides (`async.newRealTimer`, `self.ownerRecordId`, `types.Actor/Item.record(s)`,
+  `types.<Actor>.equipment`). `scan` accepts them; `api-audit` leaves them out of `stale`.
+- Runtime files (`MWSE/lib/omwcompat*`) are written with LF line ends and no BOM whatever the
+  checkout has (a Windows clone with `core.autocrlf=true` used to produce CRLF copies).
+- Every converted mod's MCM tab starts with a **Mod enabled** switch (default on, saved in
+  `MWSE/config/omwcompat_<Mod>.json`). It is runtime-only and adds nothing to `--json`. Off and
+  on take effect from the next frame without a reload; see
+  [GAPS.md](GAPS.md#per-mod-enabled-switch-040).
+- `main.lua` declares `BUILT_FOR = "0.4.0"`; the mismatch line and the dev override are
+  unchanged.
+
 ## JSON result (abridged)
 
 ```json
 {
- "tool": "omw2mwse", "version": "0.2.5", "command": "convert", "mode": "normal",
+ "tool": "omw2mwse", "version": "0.3.0", "command": "convert", "mode": "normal",
  "dir": "...", "dryRun": false, "changed": true, "exitCode": 0, "alerts": [], "pendingRecovery": [],
  "mods": [{
    "name": "LeaveTheLightsOff", "source": "Off/LeaveTheLightsOff/OpenMW",

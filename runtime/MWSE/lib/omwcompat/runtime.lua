@@ -1,5 +1,6 @@
--- omwcompat.runtime: hosts unmodified OpenMW GLOBAL and object-attached (NPC, CREATURE,
--- ACTOR, CONTAINER, DOOR, LIGHT, ACTIVATOR) Lua scripts inside MWSE.
+-- omwcompat.runtime: hosts unmodified OpenMW GLOBAL, object-attached (NPC, CREATURE, ACTOR,
+-- CONTAINER, DOOR, LIGHT, ACTIVATOR), CUSTOM (GameObject:addScript) and PLAYER Lua scripts
+-- inside MWSE.
 -- See DESIGN.md (hybrid architecture, runtime first) and docs/RUNTIME.md.
 -- MIT, Copyright (c) 2026 dej (dejunai). Built with Grok Bot.
 local util = require("omwcompat.util")
@@ -10,13 +11,16 @@ local conversions = require("omwcompat.conversions")
 local actors = require("omwcompat.actors")
 local timing = require("omwcompat.timing")
 local guards = require("omwcompat.guards")
+local player = require("omwcompat.player")
 
-local RT = { VERSION = "0.3.2", API_REVISION = 70, PROBE_API_REVISION = 100 }
+local RT = { VERSION = "0.4.0", API_REVISION = 70, PROBE_API_REVISION = 100 }
 local LOCAL_FLAG_NAMES
 objects.init(RT)
 settings.init(RT)
 actors.init(RT, objects)
 guards.init(RT, objects)
+player.init(RT, objects)
+objects.controlsOf = actors.controlsOf
 timing.version = RT.VERSION
 timing.guardStats = function()
     local out = {}
@@ -46,6 +50,8 @@ local state = {
     meshmap = {},          -- normalized long model path -> short alias (R4)
     tombs = {},            -- content ref id -> true while removed by a script (R1)
     localActive = {},      -- object id -> { key, self, scripts } for objects with local scripts in an active cell
+    attached = {},         -- object id -> { { mod, path, initData } } CUSTOM scripts added with addScript (saved)
+    playerInst = nil,      -- the player's local-script instance (PLAYER scripts and scripts added to the player)
 }
 RT._state = state
 
@@ -174,23 +180,54 @@ end
 ---------------------------------------------------------------- events (sendGlobalEvent)
 local eventQueue = {}
 local localEventQueue = {}
+-- Built-in local events OpenMW's own scripts handle (documented in "Events", 0.51): they run
+-- after the mod's handlers (built-in scripts are attached first), unless a handler returned false.
+--   ShowMessage {message} to the player -> tes3.messageBox (as ui.showMessage)
+--   Unequip {item | slot} to an actor   -> mobile:unequip
+--   PlaySound3d {sound | file, options} -> core.sound.playSound3d / playSoundFile3d on the object
+local BUILTIN_LOCAL = {}
+function BUILTIN_LOCAL.ShowMessage(ref, data)
+    if ref ~= tes3.player or type(data) ~= "table" or data.message == nil then return end
+    tes3.messageBox(tostring(data.message))
+end
+function BUILTIN_LOCAL.Unequip(ref, data)
+    local mob = ref.mobile
+    if not mob or type(data) ~= "table" then return end
+    local w = objects.wrap(ref)
+    local item = data.item
+    if item == nil and data.slot ~= nil then item = actors.getEquipment(w, data.slot) end
+    local id = type(item) == "string" and item:lower() or (type(item) == "table" and item.recordId) or nil
+    if id and actors.hasEquipped(w, id) then mob:unequip({ item = id }) end
+end
+function BUILTIN_LOCAL.PlaySound3d(ref, data)
+    if type(data) ~= "table" then return end
+    local snd = player.soundModule(function(_, t) return t end)
+    if data.file then snd.playSoundFile3d(data.file, objects.wrap(ref), data.options)
+    elseif data.sound then snd.playSound3d(data.sound, objects.wrap(ref), data.options) end
+end
+RT.BUILTIN_LOCAL = BUILTIN_LOCAL
+
 local function deliverLocalEvents()
     if #localEventQueue == 0 then return end
     local q = localEventQueue
     localEventQueue = {}
     for _, ev in ipairs(q) do
         local inst = state.localActive[ev.key]
-        if not inst then
-            RT.log("event %s for inactive object %s dropped", ev.name, tostring(ev.key))
-        else
-            for i = #inst.scripts, 1, -1 do
-                local S = inst.scripts[i]
-                local h = S.eventHandlers and S.eventHandlers[ev.name]
-                if h then
-                    local ok, r = safecall(S.path .. " event " .. ev.name, h, ev.data)
-                    if ok and r == false then break end
-                end
+        local stopped = false
+        for i = #(inst and inst.scripts or {}), 1, -1 do
+            local S = inst.scripts[i]
+            local h = S.eventHandlers and S.eventHandlers[ev.name]
+            if h then
+                local ok, r = safecall(S.path .. " event " .. ev.name, h, ev.data)
+                if ok and r == false then stopped = true; break end
             end
+        end
+        local b = BUILTIN_LOCAL[ev.name]
+        if b and not stopped then
+            local ref = objects.refOf(objects.fromId(ev.key))
+            if ref then safecall("built-in event " .. ev.name, b, ref, ev.data) end
+        elseif not inst and not b then
+            RT.log("event %s for inactive object %s dropped", ev.name, tostring(ev.key))
         end
     end
 end
@@ -245,6 +282,18 @@ local function weatherInfo(w)
     return { name = name, recordId = name and name:lower() or nil, index = idx, scriptId = name }
 end
 
+-- openmw.types is the types table itself (mods iterate it with pairs); unknown keys warn once
+function RT.typesModule()
+    local types = objects.types
+    if not getmetatable(types) then
+        setmetatable(types, { __index = function(_, k)
+            RT.warnOnce("openmw.types." .. tostring(k), "openmw.types.%s is not supported by omwcompat %s", tostring(k), RT.VERSION)
+            return nil
+        end })
+    end
+    return types
+end
+
 local loadHosted
 local function buildModules(m, S)
     local types = objects.types
@@ -265,6 +314,8 @@ local function buildModules(m, S)
             indexOf = function() return nil end,
             list = {},
         },
+        sound = player.soundModule(unsupportedProxy),
+        factions = actors.factionsModule(),
         weather = {
             getCurrent = function(cell)
                 local wc = tes3.worldController and tes3.worldController.weatherController
@@ -300,7 +351,8 @@ local function buildModules(m, S)
         getGameTime = RT.gameTime,
         getSimulationTime = function() return state.simTime end,
         isWorldPaused = function() return tes3.menuMode() end,
-        mwscript = setmetatable({ getGlobalScript = RT.getGlobalScript }, { __index = function(_, k)
+        mwscript = setmetatable({ getGlobalScript = RT.getGlobalScript, getGlobalVariables = RT.getGlobalVariables },
+            { __index = function(_, k)
             error("omwcompat: openmw.world.mwscript." .. tostring(k) .. " is not supported (MVP)", 2)
         end }),
     })
@@ -426,7 +478,7 @@ local function buildModules(m, S)
     local modules = {
         ["openmw.core"] = core,
         ["openmw.world"] = world,
-        ["openmw.types"] = unsupportedProxy("openmw.types", {}, types),
+        ["openmw.types"] = RT.typesModule(),
         ["openmw.util"] = util,
         ["openmw.async"] = makeAsync(S),
         ["openmw.storage"] = storage,
@@ -457,6 +509,12 @@ local function buildModules(m, S)
         modules["openmw.self"] = S.self
         modules["openmw.nearby"] = actors.nearbyModule()
     end
+    if S.isPlayer then
+        -- player scripts also get openmw.ui, openmw.ambient and openmw.input (partial, see player.lua)
+        modules["openmw.ui"] = player.uiModule(unsupportedProxy)
+        modules["openmw.ambient"] = player.ambientModule(unsupportedProxy)
+        modules["openmw.input"] = player.inputModule(unsupportedProxy)
+    end
     return modules
 end
 
@@ -482,6 +540,37 @@ function RT.resolveMesh(m, requested)
     local alias = state.meshmap[n] or (m and m.meshmap and m.meshmap[n])
     if alias and tes3.getFileExists("meshes\\" .. alias:gsub("/", "\\")) then return alias, "alias" end
     return nil, alias and "alias-missing" or "too-long"
+end
+
+-- world.mwscript.getGlobalVariables([player]) -> the vanilla global variables: globals[name]
+-- reads tes3.findGlobal(name).value (nil for an unknown name), assigning writes it (unknown
+-- names raise). pairs() iterates the globals of the loaded content. player is ignored.
+function RT.getGlobalVariables(_)
+    local function list()
+        local ok, l = pcall(function() return tes3.dataHandler.nonDynamicData.globals end)
+        return ok and l or {}
+    end
+    return setmetatable({}, {
+        __index = function(_, k)
+            if type(k) ~= "string" then return nil end
+            local g = tes3.findGlobal(k)
+            return g and g.value or nil
+        end,
+        __newindex = function(_, k, v)
+            local g = type(k) == "string" and tes3.findGlobal(k) or nil
+            if not g then error("omwcompat: no global variable " .. tostring(k), 2) end
+            if type(v) ~= "number" then error("omwcompat: global variables are numbers", 2) end
+            g.value = v
+        end,
+        __pairs = function()
+            local l, i = list(), 0
+            return function()
+                i = i + 1
+                local g = l[i]
+                if g then return g.id:lower(), g.value end
+            end, nil, nil
+        end,
+    })
 end
 
 -- world.mwscript.getGlobalScript(recordId[, player]) -> MWScript-like object.
@@ -670,6 +759,8 @@ end
 
 local LOCAL_KNOWN = { onUpdate = 1, onSave = 1, onLoad = 1, onInit = 1, onActive = 1, onInactive = 1, onActivated = 1,
     onInterfaceOverride = 1 }
+local PLAYER_KNOWN = { onFrame = 1, onKeyPress = 1, onKeyRelease = 1, onQuestUpdate = 1 }
+for k in pairs(LOCAL_KNOWN) do PLAYER_KNOWN[k] = 1 end
 local function instantiate(m, spec, probe, selfRef)
     local S = { path = spec.path, flags = spec.flags, callbacks = {}, mod = m, probe = probe, timing = {} }
     if not probe then S.guards = guards.normalize(S, spec.guards) end
@@ -678,6 +769,7 @@ local function instantiate(m, spec, probe, selfRef)
         S.self = objects.selfOf(selfRef)
         local ot = selfRef.object and selfRef.object.objectType
         S.isActor = ot == tes3.objectType.npc or ot == tes3.objectType.creature
+        S.isPlayer = selfRef == tes3.player
     end
     S.modules = buildModules(m, S)
     if probe then
@@ -708,7 +800,7 @@ local function instantiate(m, spec, probe, selfRef)
     S.engineHandlers = ret.engineHandlers or {}
     S.eventHandlers = ret.eventHandlers or {}
     if ret.interfaceName and ret.interface then scriptInterfaces[ret.interfaceName] = ret.interface end
-    local known = S.isLocal and LOCAL_KNOWN or { onUpdate = 1, onSave = 1, onLoad = 1, onInit = 1, onNewGame = 1, onPlayerAdded = 1,
+    local known = S.isPlayer and PLAYER_KNOWN or S.isLocal and LOCAL_KNOWN or { onUpdate = 1, onSave = 1, onLoad = 1, onInit = 1, onNewGame = 1, onPlayerAdded = 1,
         onObjectActive = 1, onActorActive = 1, onItemActive = 1, onActivate = 1, onInterfaceOverride = 1 }
     for k in pairs(S.engineHandlers) do
         if not known[k] then RT.warnOnce(spec.path .. k, "%s: engine handler %s is not supported", spec.path, k) end
@@ -762,39 +854,84 @@ local function objectIdFor(o)
 end
 local function resolveObject(id) return objects.fromId(id) end
 
+-- One mod's save payload (a string): its global scripts' onSave data and named timers, the
+-- onSave data of its active per-object/player scripts, its storage. nil if encoding failed.
+local function encodeMod(m)
+    for _, inst in pairs(state.localActive) do
+        for _, S in ipairs(inst.scripts) do
+            if S.mod == m then RT.storeLocal(S, inst) end
+        end
+    end
+    local payload = { v = 1, scripts = {}, timers = {}, storage = m.storage, locals = m.localData }
+    for _, S in ipairs(m.scripts) do
+        local h = S.engineHandlers.onSave
+        local data
+        if h then
+            local ok, r = safecall(S.path .. " onSave", h)
+            if ok then data = r end
+        end
+        payload.scripts[S.path] = { data = data }
+    end
+    for _, t in ipairs(timers) do
+        if t.name and t.script.mod == m and not t.script.isLocal then
+            payload.timers[#payload.timers + 1] = { kind = t.kind, path = t.script.path, name = t.name, arg = t.arg,
+                left = t.kind == "sim" and (t.at - state.simTime) or nil, at = t.kind ~= "sim" and t.at or nil }
+        end
+    end
+    local ok, s2 = pcall(serial.encode, payload, objectIdFor)
+    if ok then return s2 end
+    reportError(m.name .. " serialize", s2)
+    return nil
+end
+
 function RT.onSave()
     if not state.ready or not tes3.player then return end
     local pdata = tes3.player.data
     for _, m in ipairs(mods) do
-        for _, inst in pairs(state.localActive) do
-            for _, S in ipairs(inst.scripts) do
-                if S.mod == m then RT.storeLocal(S, inst) end
-            end
-        end
-        local payload = { v = 1, scripts = {}, timers = {}, storage = m.storage, locals = m.localData }
-        for _, S in ipairs(m.scripts) do
-            local h = S.engineHandlers.onSave
-            local data
-            if h then
-                local ok, r = safecall(S.path .. " onSave", h)
-                if ok then data = r end
-            end
-            payload.scripts[S.path] = { data = data }
-        end
-        for _, t in ipairs(timers) do
-            if t.name and t.script.mod == m and not t.script.isLocal then
-                payload.timers[#payload.timers + 1] = { kind = t.kind, path = t.script.path, name = t.name, arg = t.arg,
-                    left = t.kind == "sim" and (t.at - state.simTime) or nil, at = t.kind ~= "sim" and t.at or nil }
-            end
-        end
-        local ok, s = pcall(serial.encode, payload, objectIdFor)
-        if ok then
-            pdata["omwcompat_" .. m.name] = s     -- one string primitive per mod
+        if m.disabled then
+            -- switched off: keep the state it had when it was switched off (or as loaded)
+            if m.frozen then pdata["omwcompat_" .. m.name] = m.frozen end
         else
-            reportError(m.name .. " serialize", s)
+            local s2 = encodeMod(m)
+            if s2 then pdata["omwcompat_" .. m.name] = s2 end     -- one string primitive per mod
         end
     end
-    pdata[RT_KEY] = serial.encode({ v = 1, generated = state.generated, idCounter = state.idCounter, tombs = state.tombs })
+    pdata[RT_KEY] = serial.encode({ v = 1, generated = state.generated, idCounter = state.idCounter, tombs = state.tombs,
+        attached = state.attached }, objectIdFor)
+end
+
+-- Start one mod's global scripts from its save payload string (nil: a new start, onInit).
+local function loadMod(m, raw)
+    m.scripts = {}
+    local payload
+    if type(raw) == "string" then
+        local ok, r = pcall(serial.decode, raw, resolveObject)
+        if ok then payload = r else reportError(m.name .. " decode", r) end
+    end
+    m.storage = payload and payload.storage or {}
+    m.localData = payload and payload.locals or {}
+    for _, spec in ipairs(m.globalSpecs) do
+        local S = instantiate(m, spec)
+        if S then m.scripts[#m.scripts + 1] = S end
+    end
+    for _, S in ipairs(m.scripts) do
+        local saved = payload and payload.scripts and payload.scripts[S.path]
+        if saved then
+            if S.engineHandlers.onLoad then safecall(S.path .. " onLoad", S.engineHandlers.onLoad, saved.data, nil) end
+        else
+            if S.engineHandlers.onInit then safecall(S.path .. " onInit", S.engineHandlers.onInit, nil) end
+        end
+    end
+    if payload and payload.timers then
+        for _, t in ipairs(payload.timers) do
+            for _, S in ipairs(m.scripts) do
+                if S.path == t.path then
+                    addTimer({ kind = t.kind, at = t.kind == "sim" and (state.simTime + (t.left or 0)) or t.at,
+                        script = S, name = t.name, arg = t.arg })
+                end
+            end
+        end
+    end
 end
 
 function RT.onLoaded(e)
@@ -810,49 +947,29 @@ function RT.onLoaded(e)
     local pdata = tes3.player and tes3.player.data or {}
     local rtp = nil
     if pdata[RT_KEY] then
-        local ok, r = pcall(serial.decode, pdata[RT_KEY])
+        local ok, r = pcall(serial.decode, pdata[RT_KEY], resolveObject)
         if ok then rtp = r else reportError("decode runtime payload", r) end
     end
     state.generated = rtp and rtp.generated or {}
     state.idCounter = rtp and rtp.idCounter or 0
     state.tombs = rtp and rtp.tombs or {}
+    state.attached = rtp and rtp.attached or {}
+    state.playerInst = nil
     for _, m in ipairs(mods) do
-        m.scripts = {}
-        local payload
         local raw = pdata["omwcompat_" .. m.name]
-        if type(raw) == "string" then
-            local ok, r = pcall(serial.decode, raw, resolveObject)
-            if ok then payload = r else reportError(m.name .. " decode", r) end
-        end
-        m.storage = payload and payload.storage or {}
-        m.localData = payload and payload.locals or {}
-        for _, spec in ipairs(m.globalSpecs) do
-            local S = instantiate(m, spec)
-            if S then m.scripts[#m.scripts + 1] = S end
-        end
-        for _, S in ipairs(m.scripts) do
-            local saved = payload and payload.scripts and payload.scripts[S.path]
-            if saved then
-                if S.engineHandlers.onLoad then safecall(S.path .. " onLoad", S.engineHandlers.onLoad, saved.data, nil) end
-            else
-                if S.engineHandlers.onInit then safecall(S.path .. " onInit", S.engineHandlers.onInit, nil) end
-            end
-        end
-        if payload and payload.timers then
-            for _, t in ipairs(payload.timers) do
-                for _, S in ipairs(m.scripts) do
-                    if S.path == t.path then
-                        addTimer({ kind = t.kind, at = t.kind == "sim" and (state.simTime + (t.left or 0)) or t.at,
-                            script = S, name = t.name, arg = t.arg })
-                    end
-                end
-            end
+        if m.disabled then
+            m.scripts, m.localData, m.storage = {}, {}, {}
+            m.frozen = type(raw) == "string" and raw or nil
+        else
+            m.frozen = nil
+            loadMod(m, raw)
         end
     end
     state.ready = true
     if e and e.newGame then callAll("onNewGame") end
     local p = playerObject()
     if p then callAll("onPlayerAdded", p) end
+    if tes3.player then RT.attachLocal(tes3.player) end    -- PLAYER scripts
     -- OpenMW reports every active object after load; MWSE does not refire
     -- referenceActivated for an unchanged cell, so synthesize it.
     for _, cell in ipairs(tes3.getActiveCells() or {}) do
@@ -876,7 +993,7 @@ local LOCAL_FLAGS = {
     NPC = { "npc" }, CREATURE = { "creature" }, ACTOR = { "npc", "creature" },
     CONTAINER = { "container" }, DOOR = { "door" }, LIGHT = { "light" }, ACTIVATOR = { "activator" },
 }
-LOCAL_FLAG_NAMES = "NPC, CREATURE, ACTOR, CONTAINER, DOOR, LIGHT, ACTIVATOR"
+LOCAL_FLAG_NAMES = "NPC, CREATURE, ACTOR, CONTAINER, DOOR, LIGHT, ACTIVATOR, CUSTOM, PLAYER"
 RT.LOCAL_FLAGS = LOCAL_FLAGS
 
 local function specMatches(spec, ot)
@@ -916,44 +1033,145 @@ function RT.storeLocal(S, inst)
     m.localData[key] = next(per) and per or nil
 end
 
-function RT.attachLocal(ref)
-    if not state.ready or ref == tes3.player or not ref.object then return end
-    local ot = ref.object.objectType
-    local list
-    for _, m in ipairs(mods) do
-        for _, spec in ipairs(m.localSpecs) do
-            if specMatches(spec, ot) then
-                list = list or {}
-                list[#list + 1] = { m, spec }
-            end
-        end
-    end
-    if not list then return end
-    local key = objects.refId(ref, false)
-    if state.localActive[key] then return end
-    local inst = { key = key, self = objects.selfOf(ref), scripts = {} }
-    state.localActive[key] = inst
-    for _, e in ipairs(list) do
-        local m, spec = e[1], e[2]
-        local S = instantiate(m, spec, false, ref)
-        if S then
-            S.inst = inst
-            inst.scripts[#inst.scripts + 1] = S
-            local saved = m.localData[key] and m.localData[key][spec.path]
-            if saved and saved.init then
-                if S.engineHandlers.onLoad then safecall(spec.path .. " onLoad", S.engineHandlers.onLoad, saved.data, nil) end
-            elseif S.engineHandlers.onInit then
-                safecall(spec.path .. " onInit", S.engineHandlers.onInit, nil)
-            end
-            for _, t in ipairs(saved and saved.timers or {}) do
-                addTimer({ kind = t.kind, at = t.kind == "sim" and (state.simTime + (t.left or 0)) or t.at,
-                    script = S, name = t.name, arg = t.arg })
-            end
-        end
-    end
+local modsByName = {}
+local customByPath = {}   -- normalized path -> { m, spec } for CUSTOM scripts of every mod
+local function normPath(p) return (tostring(p):gsub("\\", "/"):lower()) end
+RT.normPath = normPath
+
+-- start one local script on an instance: chunk, then onLoad(saved) or onInit(initData), timers
+local function startLocal(inst, ref, m, spec, attachment)
     for _, S in ipairs(inst.scripts) do
+        if S.mod == m and S.path == spec.path then return nil end   -- already running here
+    end
+    local S = instantiate(m, spec, false, ref)
+    if not S then return nil end
+    S.inst = inst
+    S.custom = attachment ~= nil
+    inst.scripts[#inst.scripts + 1] = S
+    local saved = m.localData[inst.key] and m.localData[inst.key][spec.path]
+    if saved and saved.init then
+        if S.engineHandlers.onLoad then safecall(spec.path .. " onLoad", S.engineHandlers.onLoad, saved.data, nil) end
+    elseif S.engineHandlers.onInit then
+        safecall(spec.path .. " onInit", S.engineHandlers.onInit, attachment and attachment.initData or nil)
+    end
+    if attachment then attachment.initData = nil end
+    for _, t in ipairs(saved and saved.timers or {}) do
+        addTimer({ kind = t.kind, at = t.kind == "sim" and (state.simTime + (t.left or 0)) or t.at,
+            script = S, name = t.name, arg = t.arg })
+    end
+    return S
+end
+
+-- Attach the local scripts of an object that became active: the scripts its type matches
+-- (NPC, CREATURE, ...), PLAYER scripts for the player, and CUSTOM scripts added to it with
+-- addScript. onlyMod: attach the scripts of that one mod (an existing instance gets them added).
+function RT.attachLocal(ref, onlyMod)
+    if not state.ready or not ref or not ref.object then return end
+    local isPlayer = ref == tes3.player
+    local ot = ref.object.objectType
+    local key = objects.refId(ref, false)
+    local inst = state.localActive[key]
+    if inst and not onlyMod then return end
+    local list = {}
+    for _, m in ipairs(mods) do
+        if not m.disabled and (onlyMod == nil or m == onlyMod) then
+            for _, spec in ipairs(isPlayer and m.playerSpecs or m.localSpecs) do
+                if isPlayer or specMatches(spec, ot) then list[#list + 1] = { m, spec } end
+            end
+        end
+    end
+    for _, a in ipairs(state.attached[key] or {}) do
+        local m = modsByName[a.mod]
+        local spec = m and m.customSpecs[normPath(a.path)]
+        if spec and not m.disabled and (onlyMod == nil or m == onlyMod) then list[#list + 1] = { m, spec, a } end
+    end
+    if #list == 0 then return end
+    if not inst then
+        inst = { key = key, self = objects.selfOf(ref), scripts = {} }
+        state.localActive[key] = inst
+        if isPlayer then state.playerInst = inst end
+    end
+    local added = {}
+    for _, e in ipairs(list) do
+        local S = startLocal(inst, ref, e[1], e[2], e[3])
+        if S then added[#added + 1] = S end
+    end
+    for _, S in ipairs(added) do
         local h = S.engineHandlers.onActive
         if h then callHandler(S, "onActive", h) end
+    end
+end
+
+local function refIsActive(ref)
+    if ref == tes3.player then return true end
+    if ref.deleted or ref.disabled or objects.isTomb(ref) then return false end
+    for _, c in ipairs(tes3.getActiveCells() or {}) do if c == ref.cell then return true end end
+    return false
+end
+
+-- GameObject:addScript(path, initData): path must be a CUSTOM script of a registered mod. The
+-- attachment is saved; the script starts on the next frame if the object is active (onInit
+-- gets initData), otherwise when it becomes active. Adding a script that is already attached
+-- is ignored with a warning.
+function RT.addScript(obj, path, initData)
+    if type(path) ~= "string" then error("addScript: scriptPath must be a string", 3) end
+    local e = customByPath[normPath(path)]
+    if not e then error("addScript: " .. path .. " is not a CUSTOM script of any converted mod", 3) end
+    if rawget(obj, "_inv") or rawget(obj, "_limbo") then error("addScript: the object is not in the world", 3) end
+    local ref = objects.refOf(obj)
+    if not ref then error("addScript: invalid object", 3) end
+    if ref.object.objectType == tes3.objectType.static then error("addScript: scripts can not be attached to Statics", 3) end
+    local key = objects.refId(ref, true)
+    local list = state.attached[key] or {}
+    for _, a in ipairs(list) do
+        if normPath(a.path) == normPath(path) then
+            RT.warnOnce("addScript " .. key .. path, "addScript: %s is already attached to %s; ignored", path, key)
+            return
+        end
+    end
+    local a = { mod = e.m.name, path = e.spec.path, initData = initData }
+    list[#list + 1] = a
+    state.attached[key] = list
+    RT.defer(function()
+        local r = objects.refOf(obj)
+        if r and not e.m.disabled and refIsActive(r) then
+            local found = false
+            for _, x in ipairs(state.attached[key] or {}) do if x == a then found = true end end
+            if found then RT.attachLocal(r, e.m) end
+        end
+    end)
+end
+
+-- GameObject:removeScript(path): removes a script added with addScript (its saved data and
+-- timers too); raises if that script was not added to the object.
+function RT.removeScript(obj, path)
+    local ref = objects.refOf(obj)
+    if not ref then error("removeScript: invalid object", 3) end
+    local key = objects.refId(ref, false)
+    local list, idx = state.attached[key] or {}, nil
+    for i, a in ipairs(list) do if normPath(a.path) == normPath(path) then idx = i end end
+    if not idx then error("removeScript: " .. tostring(path) .. " was not added to this object with addScript", 3) end
+    local a = table.remove(list, idx)
+    state.attached[key] = #list > 0 and list or nil
+    local m = modsByName[a.mod]
+    local inst = state.localActive[key]
+    if inst then
+        local keep = {}
+        for _, S in ipairs(inst.scripts) do
+            if S.custom and S.path == a.path and S.mod == m then S.dead = true else keep[#keep + 1] = S end
+        end
+        inst.scripts = keep
+        if #keep == 0 then
+            state.localActive[key] = nil
+            if state.playerInst == inst then state.playerInst = nil end
+        end
+        local tk = {}
+        for _, t in ipairs(timers) do if not (t.script and t.script.dead) then tk[#tk + 1] = t end end
+        timers = tk
+    end
+    if m and m.localData[key] then
+        m.localData[key][a.path] = nil
+        if next(m.localData[key]) == nil then m.localData[key] = nil end
     end
 end
 
@@ -961,6 +1179,7 @@ function RT.detachLocal(key)
     local inst = state.localActive[key]
     if not inst then return end
     state.localActive[key] = nil
+    if state.playerInst == inst then state.playerInst = nil end
     for _, S in ipairs(inst.scripts) do
         local h = S.engineHandlers.onInactive
         if h then callHandler(S, "onInactive", h) end
@@ -996,12 +1215,21 @@ function RT.updateLocals(dt)
 end
 
 function RT.isLocalActive(obj) return state.localActive[rawget(obj, "_id")] ~= nil end
+-- hasScript: added with addScript, running on the object, or matched by its type's flags
 function RT.hasLocalScript(obj, path)
-    local inst = state.localActive[rawget(obj, "_id")]
-    if not inst or type(path) ~= "string" then return false end
-    local want = path:gsub("\\", "/"):lower()
-    for _, S in ipairs(inst.scripts) do
-        if S.path:gsub("\\", "/"):lower() == want then return true end
+    if type(path) ~= "string" or rawget(obj, "_inv") or rawget(obj, "_limbo") then return false end
+    local want = normPath(path)
+    local ref = objects.refOf(obj)
+    if not ref then return false end
+    local key = objects.refId(ref, false)
+    for _, a in ipairs(state.attached[key] or {}) do if normPath(a.path) == want then return true end end
+    local inst = state.localActive[key]
+    for _, S in ipairs(inst and inst.scripts or {}) do if normPath(S.path) == want then return true end end
+    local isPlayer = ref == tes3.player
+    for _, m in ipairs(mods) do
+        for _, spec in ipairs(isPlayer and m.playerSpecs or m.localSpecs) do
+            if normPath(spec.path) == want and (isPlayer or specMatches(spec, ref.object.objectType)) then return true end
+        end
     end
     return false
 end
@@ -1134,13 +1362,35 @@ frameWork = function(e)
     if dt > 0 then tickTimers() end
     callAll("onUpdate", dt)
     RT.updateLocals(dt)
+    RT.playerHandlers("onFrame", e.delta or 0)   -- player scripts: every frame, also while paused
+end
+
+---------------------------------------------------------------- player script handlers (0.4.0)
+function RT.playerHandlers(name, ...)
+    local inst = state.playerInst
+    if not inst then return end
+    for _, S in ipairs(inst.scripts) do
+        local h = S.engineHandlers[name]
+        if h and not S.dead then callHandler(S, name, h, ...) end
+    end
+end
+-- onKeyPress / onKeyRelease: MWSE keyDown / keyUp, outside menus only (OpenMW also reports
+-- keys in some menus; partial). onQuestUpdate(questId, stage): MWSE journal event.
+function RT.onKey(e, name)
+    if not state.ready or not state.playerInst then return end
+    if tes3.menuMode and tes3.menuMode() then return end
+    RT.playerHandlers(name, player.keyEvent(e))
+end
+function RT.onJournal(e)
+    if not state.ready or not state.playerInst or not e.topic then return end
+    RT.playerHandlers("onQuestUpdate", tostring(e.topic.id):lower(), e.index)
 end
 
 ---------------------------------------------------------------- hot reload (settings)
 -- Re-instantiate one mod's scripts in place: onSave -> rerun chunk -> onLoad(data).
 -- Used when an MCM change touches a converted constant that is read at load time.
 function RT.reloadMod(m)
-    if not state.ready then return false end
+    if not state.ready or m.disabled then return false end
     local saved = {}
     for _, S in ipairs(m.scripts) do
         local h = S.engineHandlers.onSave
@@ -1190,6 +1440,88 @@ function RT.reloadMod(m)
     mwse.log("[omwcompat] %s reloaded to apply changed settings", m.name)
     return true
 end
+
+---------------------------------------------------------------- Enabled switch (0.4.0)
+-- Off: the mod's state is encoded as if saving (m.frozen), then its global, per-object and
+-- player scripts are stopped (marked dead), its timers, activation handlers and settings
+-- subscribers dropped. Saves keep writing m.frozen. On: next frame its scripts start from
+-- m.frozen like after a load (onLoad, or onInit for scripts with no data), its per-object
+-- scripts attach to active objects and get onActive, and its global scripts get
+-- onPlayerAdded / onObjectActive / onActorActive / onItemActive for what is active.
+-- Interfaces the mod registered stay registered (other mods may hold them).
+local function dropOwned(m)
+    local function owned(owner) return owner ~= nil and owner.mod == m end
+    dropHandlersOf(owned)
+    settings.dropSubscribers(owned)
+    local keep = {}
+    for _, t in ipairs(timers) do if not (t.script and t.script.mod == m) then keep[#keep + 1] = t end end
+    timers = keep
+end
+
+local function freezeMod(m)
+    if not state.ready then return end
+    m.frozen = encodeMod(m)
+    for key, inst in pairs(state.localActive) do
+        local keep = {}
+        for _, S in ipairs(inst.scripts) do
+            if S.mod == m then S.dead = true else keep[#keep + 1] = S end
+        end
+        inst.scripts = keep
+        if #keep == 0 then
+            state.localActive[key] = nil
+            if state.playerInst == inst then state.playerInst = nil end
+        end
+    end
+    for _, S in ipairs(m.scripts) do S.dead = true end
+    dropOwned(m)
+    m.scripts, m.localData = {}, {}
+end
+
+local function resumeMod(m)
+    if not state.ready or not tes3.player then return end
+    local raw = m.frozen
+    m.frozen = nil
+    loadMod(m, raw)
+    RT.attachLocal(tes3.player, m)
+    local p = playerObject()
+    local function call(name, ...)
+        for _, S in ipairs(m.scripts) do
+            local h = S.engineHandlers[name]
+            if h then callHandler(S, name, h, ...) end
+        end
+    end
+    if p then call("onPlayerAdded", p) end
+    local types = objects.types
+    for _, cell in ipairs(tes3.getActiveCells() or {}) do
+        for ref in cell:iterateReferences() do
+            if not ref.deleted and not ref.disabled and not objects.isTomb(ref) and ref ~= tes3.player then
+                RT.attachLocal(ref, m)
+                local w = objects.wrap(ref)
+                call("onObjectActive", w)
+                local T = w.type
+                if T == types.NPC or T == types.Creature then call("onActorActive", w)
+                elseif T and T._isItem then call("onItemActive", w) end
+            end
+        end
+    end
+end
+
+function RT.isEnabled(m) return not m.disabled end
+function RT.setEnabled(m, on)
+    on = on and true or false
+    if on == not m.disabled then return end
+    settings.setModEnabled(m.name, on)
+    if on then
+        m.disabled = false
+        RT.log("%s enabled", m.name)
+        if state.ready then RT.defer(function() if not m.disabled then resumeMod(m) end end) end
+    else
+        if state.ready then freezeMod(m) end
+        m.disabled = true
+        RT.log("%s disabled", m.name)
+    end
+end
+function RT.modByName(name) return modsByName[name] end
 
 ---------------------------------------------------------------- mwsuite notice
 -- Converted mods are maintained by mwsuite; original authors must not get support
@@ -1244,6 +1576,9 @@ local function wire()
         event.register(tes3.event.referenceDeactivated, function(e) RT.onReferenceDeactivated(e.reference) end)
     end
     event.register(tes3.event.modConfigReady, RT.onModConfigReady)
+    event.register(tes3.event.keyDown, function(e) RT.onKey(e, "onKeyPress") end)
+    event.register(tes3.event.keyUp, function(e) RT.onKey(e, "onKeyRelease") end)
+    event.register(tes3.event.journal, RT.onJournal)
 end
 
 -- spec = { mod = "Name", root = "Data Files/MWSE/mods/mwsuite/openmw/Name/omw/", scripts = {{flags={"GLOBAL"}, path="scripts/x.lua"}},
@@ -1265,12 +1600,19 @@ function RT.register(spec)
     local root = spec.root:gsub("\\", "/")
     if root:sub(-1) ~= "/" then root = root .. "/" end
     local m = { name = spec.mod, builtFor = built, title = spec.title, credits = spec.credits, root = root, spec = spec, scripts = {}, storage = {}, meshmap = {},
-        globalSpecs = {}, localSpecs = {}, localData = {} }
+        globalSpecs = {}, localSpecs = {}, localData = {}, playerSpecs = {}, customSpecs = {} }
+    m.disabled = not settings.modEnabled(m.name)
+    modsByName[m.name] = m
     for _, sp in ipairs(spec.scripts) do
         local isGlobal, lflags, skipped = false, {}, {}
         for _, f in ipairs(sp.flags or {}) do
             f = tostring(f):upper()
             if f == "GLOBAL" then isGlobal = true
+            elseif f == "PLAYER" then m.playerSpecs[#m.playerSpecs + 1] = { path = sp.path, flags = sp.flags, localFlags = {} }
+            elseif f == "CUSTOM" then
+                local cs = { path = sp.path, flags = sp.flags, localFlags = {} }
+                m.customSpecs[normPath(sp.path)] = cs
+                customByPath[normPath(sp.path)] = { m = m, spec = cs }
             elseif LOCAL_FLAGS[f] then lflags[#lflags + 1] = f
             else skipped[#skipped + 1] = f end
         end

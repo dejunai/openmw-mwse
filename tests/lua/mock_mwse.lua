@@ -213,7 +213,7 @@ function M.install(opts)
 
     local ev = {}
     for _, n in ipairs({ "initialized", "loaded", "save", "enterFrame", "activate", "referenceActivated", "referenceDeactivated",
-        "cellChanged", "simulate", "modConfigReady", "load" }) do ev[n] = n end
+        "cellChanged", "simulate", "modConfigReady", "load", "keyDown", "keyUp", "journal" }) do ev[n] = n end
     _G.tes3 = {
         objectType = OT,
         weather = { clear = 0, cloudy = 1, foggy = 2, overcast = 3, rain = 4, thunder = 5, ash = 6, blight = 7, snow = 8, blizzard = 9 },
@@ -271,7 +271,8 @@ function M.install(opts)
         messageBox = function() end,
         aiPackage = { none = -1, wander = 0, travel = 1, escort = 2, follow = 3, activate = 4 },
         setStatistic = function(p)
-            local st = p.reference.mobile and p.reference.mobile[p.name]
+            local mob = p.reference.mobile
+            local st = mob and (p.skill and mob:getSkillStatistic(p.skill) or mob[p.name])
             assert(st, "setStatistic: no mobile statistic " .. tostring(p.name))
             if p.current then st.current = p.current end
             if p.base then st.base = p.base end
@@ -281,6 +282,88 @@ function M.install(opts)
         setAIFollow = function(p) W.aiCalls = W.aiCalls or {}; W.aiCalls[#W.aiCalls + 1] = { "follow", p } end,
         setAIEscort = function(p) W.aiCalls = W.aiCalls or {}; W.aiCalls[#W.aiCalls + 1] = { "escort", p } end,
     }
+
+    ------------------------------------------------------------ 0.4.0 additions
+    -- messages, sounds, items, locks, owners, journal, factions, rayTest, input
+    W.messages, W.sounds, W.journal, W.keysDown = {}, {}, {}, {}
+    tes3.messageBox = function(fmt, ...)
+        local t = type(fmt) == "table" and fmt.message or (select("#", ...) > 0 and string.format(fmt, ...) or fmt)
+        W.messages[#W.messages + 1] = t
+    end
+    tes3.playSound = function(p)
+        W.sounds[#W.sounds + 1] = { op = "play", sound = p.sound, path = p.soundPath, ref = p.reference, volume = p.volume,
+            pitch = p.pitch, loop = p.loop }
+        return true
+    end
+    tes3.removeSound = function(p) W.sounds[#W.sounds + 1] = { op = "remove", sound = p.sound, ref = p.reference } end
+    tes3.getSoundPlaying = function(p)
+        for i = #W.sounds, 1, -1 do
+            local x = W.sounds[i]
+            if x.ref == p.reference and (p.sound == nil or x.sound == p.sound or x.sound == nil) then return x.op == "play" end
+        end
+        return false
+    end
+    tes3.say = function(p) W.sounds[#W.sounds + 1] = { op = "say", path = p.soundPath, ref = p.reference, text = p.subtitle } end
+    tes3.streamMusic = function(p) W.music = p.path end
+    tes3.skill = { block = 0, sneak = 19, longBlade = 5 }
+    tes3.dialogueType = { journal = 4 }
+    local function invOf(r) return r.object.inventory end
+    tes3.removeItem = function(p)
+        local inv, id, n = invOf(p.reference), (type(p.item) == "string" and p.item or p.item.id):lower(), p.count or 1
+        local removed = 0
+        for i = #inv, 1, -1 do
+            local st = inv[i]
+            if st.object.id:lower() == id and removed < n then
+                local k = math.min(st.count, n - removed)
+                st.count = st.count - k; removed = removed + k
+                if st.count <= 0 then table.remove(inv, i) end
+            end
+        end
+        return removed
+    end
+    tes3.transferItem = function(p)
+        local n = tes3.removeItem({ reference = p.from, item = p.item, count = p.count })
+        if n > 0 then tes3.addItem({ reference = p.to, item = (type(p.item) == "string" and p.item or p.item.id), count = n }) end
+        return n
+    end
+    tes3.getOwner = function(p)
+        local r = p.reference
+        if not r.owner then return nil, nil end
+        return r.owner, r.ownerRank
+    end
+    tes3.setOwner = function(p)
+        if p.remove then p.reference.owner, p.reference.ownerRank = nil, nil; return end
+        p.reference.owner = type(p.owner) == "string" and W.objects[p.owner:lower()] or p.owner
+        p.reference.ownerRank = p.requiredRank
+    end
+    tes3.getLocked = function(p) return p.reference.lockNode ~= nil and p.reference.lockNode.locked == true end
+    tes3.getLockLevel = function(p) return p.reference.lockNode and p.reference.lockNode.level or nil end
+    tes3.lock = function(p)
+        local r = p.reference
+        r.lockNode = r.lockNode or { level = 0 }
+        r.lockNode.locked = true
+        if p.level then r.lockNode.level = p.level end
+        return true
+    end
+    tes3.unlock = function(p) if p.reference.lockNode then p.reference.lockNode.locked = false end; return true end
+    tes3.getJournalIndex = function(p) return W.journal[p.id:lower()] or 0 end
+    tes3.setJournalIndex = function(p) W.journal[p.id:lower()] = p.index; return true end
+    tes3.updateJournal = function(p)
+        W.journal[p.id:lower()] = p.index
+        M.fire("journal", { topic = { id = p.id }, index = p.index, new = true })
+        return true
+    end
+    W.dialogues = {}
+    tes3.findDialogue = function(p) return W.dialogues[p.topic:lower()] end
+    W.globals = { chargenstate = { value = -1 } }
+    tes3.findGlobal = function(id) return W.globals[id:lower()] or { value = 30 } end
+    W.factions = {}
+    tes3.dataHandler = { nonDynamicData = { factions = W.factions } }
+    function M.addFaction(f) W.factions[#W.factions + 1] = f; return f end
+    W.rayHit = nil
+    tes3.rayTest = function(p) W.lastRay = p; return W.rayHit end
+    wc.inputController = { isKeyDown = function(_, dik) return W.keysDown[dik] == true end }
+    function M.setKeyDown(dik, on) W.keysDown[dik] = on or nil end
 
     ------------------------------------------------------------ events / timers
     local function sortH(name)
@@ -333,6 +416,27 @@ function M.install(opts)
             if t.sticky then self.inCombat = true; self.actionData.target = target end
         end
         function mob:stopCombat() self.inCombat = false; self.actionData.target = nil end
+        mob.castReady, mob.weaponReady = false, false
+        mob.skills = {}
+        function mob:getSkillStatistic(sid)
+            self.skills[sid] = self.skills[sid] or { base = 10, current = 10 }
+            return self.skills[sid]
+        end
+        -- equip / unequip move inventory stacks in and out of ref.object.equipment
+        function mob:equip(p)
+            local id = (type(p.item) == "string" and p.item or p.item.id):lower()
+            local o = W.objects[id]
+            local eq = ref.object.equipment or {}
+            rawset(ref.object, "equipment", eq)
+            eq[#eq + 1] = { object = o }
+            return true
+        end
+        function mob:unequip(p)
+            local id = (type(p.item) == "string" and p.item or p.item.id):lower()
+            local eq = ref.object.equipment or {}
+            for i = #eq, 1, -1 do if eq[i].object.id:lower() == id then table.remove(eq, i) end end
+            return true
+        end
         rawset(ref, "mobile", mob)
         return mob
     end

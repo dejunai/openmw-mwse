@@ -53,7 +53,7 @@ local g = assert(io.open(SYN .. "scripts/p.lua", "w")); g:write("return {}\n"); 
 local function warnings(mod, builtFor)
     local start = #W.logs
     rt.register({ mod = mod, root = SYN, runtimeVersion = builtFor,
-        scripts = { { flags = { "PLAYER" }, path = "scripts/p.lua" } } })
+        scripts = { { flags = { "MENU" }, path = "scripts/p.lua" } } })
     local out = {}
     for i = start + 1, #W.logs do
         if W.logs[i]:find("not hosted", 1, true) then out[#out + 1] = W.logs[i] end

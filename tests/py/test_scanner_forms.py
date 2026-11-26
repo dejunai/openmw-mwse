@@ -68,12 +68,12 @@ class FixtureScan(unittest.TestCase):
 
     def test_typed_methods(self):
         self.assertEqual(self.typed["Inventory:countOf"], "full")
-        self.assertEqual(self.typed["Inventory:getAll"], "unsupported")
+        self.assertEqual(self.typed["Inventory:getAll"], "partial")
         self.assertEqual(self.typed["Cell:getAll"], "partial")
         self.assertEqual(self.typed["Transform:getAnglesZYX"], "full")
         self.assertEqual(self.typed["Type.createRecordDraft"], "partial")
         self.assertEqual(self.typed["StorageSection:get"], "full")
-        self.assertIn("unsupported method Inventory:getAll (1x)", self.r["blockers"])
+        self.assertNotIn("unsupported method Inventory:getAll (1x)", self.r["blockers"])  # partial since 0.4.0
         kinds = {p["api"]: p["kind"] for p in self.r["partialApis"]}
         self.assertEqual(kinds["Cell:getAll"], "typedMethod")
         self.assertNotIn("string:lower", self.typed)           # obj.recordId:lower() is plain Lua
@@ -90,12 +90,15 @@ class SmallForms(unittest.TestCase):
         self.assertNotIn("?:get", r["typedMethods"])
         self.assertEqual(r["verdict"], "ready")
 
-    def test_inventory_find_blocks(self):
-        r = scan_lua("local types = require('openmw.types')\nlocal self = require('openmw.self')\n"
-                     "local function f()\n  local inv = types.Actor.inventory(self)\n"
-                     "  return inv:find('gold_001')\nend\nreturn { engineHandlers = { onUpdate = f } }\n",
-                     kind="NPC")
-        self.assertEqual(r["typedMethods"]["Inventory:find"]["status"], "unsupported")
+    def test_inventory_find_is_partial_resolve_blocks(self):
+        src = ("local types = require('openmw.types')\nlocal self = require('openmw.self')\n"
+               "local function f()\n  local inv = types.Actor.inventory(self)\n"
+               "  return inv:%s\nend\nreturn { engineHandlers = { onUpdate = f } }\n")
+        r = scan_lua(src % "find('gold_001')", kind="NPC")
+        self.assertEqual(r["typedMethods"]["Inventory:find"]["status"], "partial")
+        self.assertNotEqual(r["verdict"], "blocked")
+        r = scan_lua(src % "resolve()", kind="NPC")
+        self.assertEqual(r["typedMethods"]["Inventory:resolve"]["status"], "unsupported")
         self.assertEqual(r["verdict"], "blocked")
 
     def test_no_alias_from_field_target(self):
@@ -112,7 +115,9 @@ class SmallForms(unittest.TestCase):
     def test_value_types(self):
         go = AT.game_object_members(MANIFEST)
         self.assertEqual(AT.member_status("Cell", ["getAll"], go), "partial")
-        self.assertEqual(AT.member_status("Inventory", ["getAll"], go), "unsupported")
+        self.assertEqual(AT.member_status("Inventory", ["getAll"], go), "partial")
+        self.assertEqual(AT.member_status("Inventory", ["resolve"], go), "unsupported")
+        self.assertEqual(AT.member_status("GameObject", ["owner", "recordId"], go), "partial")
         self.assertEqual(AT.member_status("string", ["gsub"], go), "full")
         self.assertEqual(AT.member_status("Vector3", ["nonsense"], go), "unlisted")
         self.assertEqual(AT.member_status("GameObject", ["cell", "name"], go), "full")
