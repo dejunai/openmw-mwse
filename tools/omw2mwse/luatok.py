@@ -19,6 +19,8 @@ class Token:
     kind: str   # name, keyword, string, number, symbol
     value: str
     line: int
+    start: int = -1  # character offsets into the source: src[start:end] is the raw token
+    end: int = -1
 
 
 class LuaSyntaxError(Exception):
@@ -73,7 +75,7 @@ def tokenize(src: str) -> list[Token]:
                 body = src[j:k]
                 if body.startswith("\n"):
                     body = body[1:]
-                toks.append(Token("string", body, line))
+                toks.append(Token("string", body, line, i, k + len(close)))
                 line += src.count("\n", i, k)
                 i = k + len(close)
                 continue
@@ -116,26 +118,26 @@ def tokenize(src: str) -> list[Token]:
                     raise LuaSyntaxError(f"unfinished string at line {line}")
                 buf.append(d)
                 j += 1
-            toks.append(Token("string", "".join(buf), line))
+            toks.append(Token("string", "".join(buf), line, i, j + 1))
             i = j + 1
             continue
         if c.isdigit() or (c == "." and i + 1 < n and src[i + 1].isdigit()):
             m = _NUM.match(src, i)
-            toks.append(Token("number", m.group(0), line))
+            toks.append(Token("number", m.group(0), line, i, m.end()))
             i = m.end()
             continue
         m = _NAME.match(src, i)
         if m:
             w = m.group(0)
-            toks.append(Token("keyword" if w in KEYWORDS else "name", w, line))
+            toks.append(Token("keyword" if w in KEYWORDS else "name", w, line, i, m.end()))
             i = m.end()
             continue
         for s in _SYMS:
             if src.startswith(s, i):
-                toks.append(Token("symbol", s, line))
+                toks.append(Token("symbol", s, line, i, i + len(s)))
                 i += len(s)
                 break
         else:
-            toks.append(Token("symbol", c, line))
+            toks.append(Token("symbol", c, line, i, i + 1))
             i += 1
     return toks

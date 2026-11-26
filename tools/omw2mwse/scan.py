@@ -60,6 +60,8 @@ class FileScan:
     event_handlers: list[str] = field(default_factory=list)
     meshes: list[str] = field(default_factory=list)
     local_requires: list[str] = field(default_factory=list)
+    settings: list[dict] = field(default_factory=list)          # registerGroup declarations
+    custom_renderers: list[str] = field(default_factory=list)   # registerRenderer names
     error: str | None = None
 
 
@@ -116,6 +118,86 @@ def _find_table_for_name(toks: list[Token], name: str) -> int | None:
         if toks[j].kind == "name" and toks[j].value == name and toks[j + 1].value == "=" and toks[j + 2].value == "{":
             return j + 2
     return None
+
+
+def _settings_list(toks: list[Token], start: int) -> tuple[list[dict], bool]:
+    """Entries { key=, renderer= } of a settings list constructor at toks[start] == '{'."""
+    out, depth, k, cur, n = [], 0, start, None, len(toks)
+    dynamic = False
+    while k < n:
+        x = toks[k]
+        if x.kind == "symbol" and x.value in ("{", "(", "["):
+            depth += 1
+            if depth == 2 and x.value == "{":
+                cur = {"key": None, "renderer": "textLine"}
+        elif x.kind == "symbol" and x.value in ("}", ")", "]"):
+            if depth == 2 and x.value == "}" and cur is not None:
+                out.append(cur)
+                cur = None
+            depth -= 1
+            if depth == 0:
+                break
+        elif depth == 2 and cur is not None and x.kind == "name" and k + 2 < n and toks[k + 1].value == "=":
+            v = toks[k + 2]
+            if x.value == "key":
+                cur["key"] = v.value if v.kind == "string" else "<dynamic>"
+            elif x.value == "renderer":
+                cur["renderer"] = v.value if v.kind == "string" and toks[k + 3].value in (",", "}", ";") else "<dynamic>"
+        elif depth == 1 and x.kind == "keyword" and x.value in ("for", "function"):
+            dynamic = True
+        k += 1
+    if not out:
+        dynamic = True
+    return out, dynamic
+
+
+def _settings_groups(toks: list[Token]) -> tuple[list[dict], list[str]]:
+    """registerGroup({ key = ..., settings = { { key, renderer, default }, ... } }) declarations."""
+    groups, renderers = [], []
+    n = len(toks)
+    for i, t in enumerate(toks):
+        if t.kind != "name" or i + 1 >= n:
+            continue
+        if t.value == "registerRenderer":
+            j = i + 1
+            if toks[j].value == "(":
+                j += 1
+            if j < n and toks[j].kind == "string":
+                renderers.append(toks[j].value)
+            continue
+        if t.value != "registerGroup":
+            continue
+        j = i + 1
+        if toks[j].value == "(":
+            j += 1
+        if j >= n or toks[j].value != "{":
+            continue
+        g = {"key": None, "settings": [], "dynamic": False}
+        depth, k = 0, j
+        while k < n:
+            x = toks[k]
+            if x.kind == "symbol" and x.value in ("{", "(", "["):
+                depth += 1
+            elif x.kind == "symbol" and x.value in ("}", ")", "]"):
+                depth -= 1
+                if depth == 0:
+                    break
+            elif depth == 1 and x.kind == "name" and k + 2 < n and toks[k + 1].value == "=":
+                v = toks[k + 2]
+                if x.value == "key" and v.kind == "string":
+                    g["key"] = v.value
+                elif x.value == "key":
+                    g["key"] = "<dynamic>"
+                elif x.value == "settings":
+                    start = k + 2 if v.value == "{" else (_find_table_for_name(toks, v.value) if v.kind == "name" else None)
+                    if start is None:
+                        g["dynamic"] = True
+                    else:
+                        g["settings"], dyn = _settings_list(toks, start)
+                        g["dynamic"] = g["dynamic"] or dyn
+            k += 1
+        groups.append(g)
+    return groups, renderers
 
 
 def scan_lua(src: str, path: str, method_names: set[str]) -> FileScan:
@@ -188,6 +270,7 @@ def scan_lua(src: str, path: str, method_names: set[str]) -> FileScan:
             if start is not None:
                 keys = _table_keys(toks, start)
                 (fs.engine_handlers if t.value == "engineHandlers" else fs.event_handlers).extend(keys)
+    fs.settings, fs.custom_renderers = _settings_groups(toks)
     return fs
 
 
@@ -233,6 +316,14 @@ class ModScan:
     meshes: list[str]
     blockers: list[str]
     warnings: list[str]
+    settings: dict = field(default_factory=dict)
+    hardcode: list[dict] = field(default_factory=list)
+
+    def settings_coverage(self) -> tuple[int, int]:
+        r = self.settings.get("renderers", {})
+        total = sum(e["count"] for e in r.values())
+        ok = sum(e["count"] for e in r.values() if e["status"] in ("full", "partial"))
+        return ok, total
 
     @property
     def verdict(self) -> str:
@@ -265,6 +356,8 @@ class ModScan:
             "unsupportedModules": self.unsupported_modules, "meshes": self.meshes,
             "blockers": self.blockers, "warnings": self.warnings,
             "errors": {f.path: f.error for f in self.files if f.error},
+            "settings": dict(self.settings, coverage=list(self.settings_coverage())) if self.settings else {},
+            "hardcodeCandidates": self.hardcode,
         }
 
 
@@ -378,19 +471,52 @@ def scan_mod(root: Path, manifest: dict | None = None, name: str | None = None) 
                 w = f"optional interface I.{iname} (nil unless another hosted mod provides it)"
                 if w not in warnings:
                     warnings.append(w)
+    # settings (I.Settings) coverage
+    known = manifest.get("settingsRenderers", {})
+    renderers: dict[str, dict] = {}
+    groups = []
+    custom = sorted({r for f in files for r in f.custom_renderers})
+    for f in files:
+        for g in f.settings:
+            groups.append({"key": g["key"], "file": f.path, "settings": len(g["settings"]), "dynamic": g["dynamic"]})
+            for st in g["settings"]:
+                r = st["renderer"]
+                status = known.get(r, "dynamic" if r == "<dynamic>" else "custom")
+                e = renderers.setdefault(r, {"status": status, "count": 0})
+                e["count"] += 1
+    for r, e in sorted(renderers.items()):
+        if e["status"] not in ("full", "partial"):
+            warnings.append(f"settings renderer {r} x{e['count']} ({e['status']}: MCM shows a fallback control)")
+    settings_info = {"groups": groups, "renderers": renderers, "customRenderers": custom} if groups or custom else {}
+    # hard-coded constant candidates (reported; converted only by `convert --mode hardcode` / sidecar)
+    from .constants import detect  # local import: constants imports luatok only
+    hard = []
+    for p in find_lua_files(root):
+        rel = str(p.relative_to(root)).replace(os.sep, "/")
+        try:
+            consts, inline = detect(read_text(p))
+        except LuaSyntaxError:
+            continue
+        for c in consts:
+            if c.eligible:
+                hard.append(dict(c.to_json(), file=rel, kind="constant"))
+        for x in inline:
+            hard.append(dict(x.to_json(), file=rel, kind="literal"))
     return ModScan(name or root.name, str(root), scripts, files, symbols, handlers, events, methods, flags,
-                   unsup_mods, meshes, blockers, warnings)
+                   unsup_mods, meshes, blockers, warnings, settings_info, hard)
 
 
 def render_markdown(scans: list[ModScan], title: str = "omw2mwse scan") -> str:
     out = [f"# {title}", ""]
-    out.append("| Mod | Lua files | Script flags | API uses OK/total | Verdict | Blockers |")
-    out.append("|---|---:|---|---:|---|---|")
+    out.append("| Mod | Lua files | Script flags | API uses OK/total | Settings OK/total | Verdict | Blockers |")
+    out.append("|---|---:|---|---:|---:|---|---|")
     for s in scans:
         ok, total = s.coverage()
         pct = f"{ok}/{total} ({(100 * ok // total) if total else 100}%)"
         fl = ", ".join(sorted(s.flags)) or "-"
-        out.append(f"| {s.name} | {len(s.files)} | {fl} | {pct} | {s.verdict} | {len(s.blockers)} |")
+        so, st = s.settings_coverage()
+        spct = f"{so}/{st}" if st else "-"
+        out.append(f"| {s.name} | {len(s.files)} | {fl} | {pct} | {spct} | {s.verdict} | {len(s.blockers)} |")
     out.append("")
     for s in scans:
         out.append(f"## {s.name}")
@@ -404,6 +530,14 @@ def render_markdown(scans: list[ModScan], title: str = "omw2mwse scan") -> str:
             out.append("- Engine handlers: " + ", ".join(f"{h} ({st})" for h, st in sorted(s.handlers.items())))
         if s.event_handlers:
             out.append("- Event handlers: " + ", ".join(s.event_handlers))
+        if s.settings:
+            so, st = s.settings_coverage()
+            out.append(f"- Settings: {len(s.settings['groups'])} group(s), renderers OK {so}/{st}: " + ", ".join(
+                f"{r} x{e['count']} ({e['status']})" for r, e in sorted(s.settings["renderers"].items())))
+        if s.hardcode:
+            out.append(f"- Hard-coded candidates: {len(s.hardcode)} (" + ", ".join(
+                (h["name"] if h["kind"] == "constant" else h["context"]) for h in s.hardcode[:8])
+                + (", ..." if len(s.hardcode) > 8 else "") + ")")
         if s.methods:
             out.append("- GameObject methods: " + ", ".join(f"{m} x{e['count']} ({e['status']})" for m, e in sorted(s.methods.items())))
         if s.blockers:
