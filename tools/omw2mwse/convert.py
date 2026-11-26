@@ -28,6 +28,7 @@ from . import warn
 from .build import (MANIFEST_NAME, BuildError, Writer, build, is_game_asset, iter_original_files, mod_dir,
                     renamed_plugin,
                     notice_text, original_off_prefix, sha256b, text_bytes)
+from .optout import find_opt_out
 from .scan import load_manifest
 
 MODES = ("normal", "hardcode")
@@ -198,6 +199,19 @@ def convert(staged: Path, mode: str = "normal", *, name: str | None = None, sour
                 continue
             result["alerts"].append({"level": "info", "code": "duplicate-source",
                                      "message": f"{dup.relative_to(staged)} is identical to {src.relative_to(staged)}; used the latter"})
+        opt = find_opt_out(src)
+        if opt:
+            # author opt-out: write nothing, move nothing; tidy treats it like any blocked mod
+            entry = {"name": modname, "source": str(src.relative_to(staged)) if staged in src.parents else str(src),
+                     "status": "ok", "verdict": "blocked", "reason": opt,
+                     "alerts": [dict(opt, level="error")], "files": {}, "plugins": [], "conflicts": [], "rewrites": [],
+                     "hardcodeLog": [], "changed": False}
+            if (staged / mod_dir(modname) / MANIFEST_NAME).is_file():
+                entry["alerts"].append({"level": "warning", "code": "previous-output-present",
+                                        "message": f"{mod_dir(modname)} holds output from an earlier conversion; "
+                                                   "it was left as is"})
+            result["mods"].append(entry)
+            continue
         man_rel = f"{mod_dir(modname)}{MANIFEST_NAME}"
         legacy_rel = f"MWSE/omw/{modname}/{MANIFEST_NAME}"     # 0.2.0 layout
         prev = {}

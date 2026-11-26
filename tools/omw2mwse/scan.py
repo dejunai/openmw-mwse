@@ -319,6 +319,7 @@ class ModScan:
     warnings: list[str]
     settings: dict = field(default_factory=dict)
     hardcode: list[dict] = field(default_factory=list)
+    opt_out: dict | None = None
 
     def settings_coverage(self) -> tuple[int, int]:
         r = self.settings.get("renderers", {})
@@ -359,6 +360,7 @@ class ModScan:
             "errors": {f.path: f.error for f in self.files if f.error},
             "settings": dict(self.settings, coverage=list(self.settings_coverage())) if self.settings else {},
             "hardcodeCandidates": self.hardcode,
+            "optOut": self.opt_out,
         }
 
 
@@ -647,8 +649,12 @@ def scan_mod(root: Path, manifest: dict | None = None, name: str | None = None) 
                 hard.append(dict(c.to_json(), file=f.path, kind="constant"))
         for x in inline:
             hard.append(dict(x.to_json(), file=f.path, kind="literal"))
+    from .optout import find_opt_out  # local import: optout is standalone
+    opt = find_opt_out(root)
+    if opt:
+        blockers.insert(0, f"{opt['code']}: {opt['file']}:{opt['line']}: the mod author opted out of mwsuite conversion")
     return ModScan(name or root.name, str(root), scripts, files, symbols, handlers, events, methods, flags,
-                   unsup_mods, meshes, blockers, warnings, settings_info, hard)
+                   unsup_mods, meshes, blockers, warnings, settings_info, hard, opt)
 
 
 def render_markdown(scans: list[ModScan], title: str = "omw2mwse scan") -> str:

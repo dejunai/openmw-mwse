@@ -8,6 +8,7 @@ from pathlib import Path
 from . import __version__
 from .build import (BuildError, Writer, build, default_slug, lua_str, mesh_alias, render_main,  # noqa: F401 (re-exported)
                     render_metadata, sha256b, text_bytes)
+from .optout import find_opt_out
 from .scan import load_manifest
 
 MARKER = ".omw2mwse-output"
@@ -27,6 +28,9 @@ def package(src: Path, out: Path, name: str | None = None, slug: str | None = No
         raise PackageError(f"source {src} is not a directory")
     if out == src or src in out.parents or out in src.parents:
         raise PackageError("output must not be inside the source (or vice versa)")
+    opt = find_opt_out(src)
+    if opt:
+        raise PackageError(opt["message"])
     manifest = manifest or load_manifest()
     name = name or src.name
     if out.exists():

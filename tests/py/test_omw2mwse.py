@@ -246,6 +246,81 @@ class LocalScriptScanTests(unittest.TestCase):
         self.assertEqual(s.verdict, "ready", s.blockers)
 
 
+from omw2mwse.convert import convert as convert_staged  # noqa: E402
+from omw2mwse.optout import REASON_CODE, header_opt_out_line  # noqa: E402
+
+GLOBAL_SRC = "local world = require('openmw.world')\nreturn {}\n"
+
+
+class OptOutTests(unittest.TestCase):
+    def test_header_line_comment(self):
+        self.assertEqual(header_opt_out_line("-- My mod\n-- mwsuite conversion opt-out\nlocal x = 1\n"), 2)
+
+    def test_block_comment(self):
+        src = "--[[\n  My mod by someone\n  mwsuite conversion opt-out\n]]\nlocal x = 1\n"
+        self.assertEqual(header_opt_out_line(src), 3)
+        self.assertEqual(header_opt_out_line("--[==[ x ]] mwsuite conversion opt-out ]==]\nreturn 1\n"), 1)
+
+    def test_blank_lines_bom_and_shebang_allowed(self):
+        src = "\ufeff#!/usr/bin/env lua\n\n   \n-- header\n\n--mwsuite conversion opt-out\nreturn 1\n"
+        self.assertEqual(header_opt_out_line(src), 6)
+
+    def test_case_and_whitespace_variants(self):
+        for phrase in ("MWSuite Conversion Opt-Out", "mwsuite   conversion\topt - out", "MWSUITE CONVERSION OPT OUT",
+                       "please: mwsuite conversion opt-out."):
+            self.assertEqual(header_opt_out_line(f"-- {phrase}\nreturn 1\n"), 1, phrase)
+
+    def test_after_code_does_not_count(self):
+        self.assertIsNone(header_opt_out_line("local x = 1\n-- mwsuite conversion opt-out\n"))
+        self.assertIsNone(header_opt_out_line("-- header\nreturn {} -- mwsuite conversion opt-out\n"))
+        self.assertIsNone(header_opt_out_line("print('x')\n--[[ mwsuite conversion opt-out ]]\n"))
+        self.assertIsNone(header_opt_out_line("local s = '-- mwsuite conversion opt-out'\n"))
+        self.assertIsNone(header_opt_out_line("-- mwsuite conversion\n-- opt-out\nreturn 1\n"))
+
+    def test_scan_blocks_with_reason(self):
+        with tempfile.TemporaryDirectory() as t:
+            _make_mod(Path(t), script_src="-- mwsuite conversion opt-out\n" + GLOBAL_SRC)
+            s = scan_mod(Path(t), MANIFEST)
+            self.assertEqual(s.verdict, "blocked")
+            self.assertEqual(s.opt_out["code"], REASON_CODE)
+            self.assertEqual((s.opt_out["file"], s.opt_out["line"]), ("scripts/M/m.lua", 1))
+            self.assertTrue(s.blockers[0].startswith(REASON_CODE + ": scripts/M/m.lua:1"))
+            self.assertEqual(s.to_dict()["optOut"]["code"], REASON_CODE)
+
+    def test_undeclared_lua_opts_out_and_convert_writes_nothing(self):
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t)
+            _make_mod(root, script_src=GLOBAL_SRC)
+            (root / "scripts" / "M" / "notes.lua").write_text("--[[ mwsuite conversion opt-out ]]\n", encoding="utf-8")
+            before = sorted(p.relative_to(root).as_posix() for p in root.rglob("*"))
+            r = convert_staged(root, "normal")
+            after = sorted(p.relative_to(root).as_posix() for p in root.rglob("*"))
+            self.assertEqual(before, after)
+            m = r["mods"][0]
+            self.assertEqual(m["verdict"], "blocked")
+            self.assertEqual(m["reason"], {"code": REASON_CODE, "file": "scripts/M/notes.lua", "line": 1,
+                                           "message": m["reason"]["message"]})
+            self.assertEqual(m["alerts"][0]["code"], REASON_CODE)
+            self.assertFalse(r["changed"])
+            self.assertEqual(r["exitCode"], 0)
+
+    def test_package_refuses(self):
+        with tempfile.TemporaryDirectory() as t:
+            src = Path(t) / "src"
+            _make_mod(src, script_src="-- mwsuite conversion opt-out\n" + GLOBAL_SRC)
+            with self.assertRaises(PackageError):
+                package(src, Path(t) / "out", name="M")
+            self.assertFalse((Path(t) / "out").exists())
+
+    def test_no_phrase_still_converts(self):
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t)
+            _make_mod(root, script_src="local x = 1\n-- mwsuite conversion opt-out\n" + GLOBAL_SRC)
+            r = convert_staged(root, "normal")
+            self.assertEqual(r["mods"][0]["verdict"], "ready")
+            self.assertNotIn("reason", r["mods"][0])
+
+
 class PackageTests(unittest.TestCase):
     def test_slug_and_alias(self):
         self.assertEqual(default_slug("LeaveTheLightsOff"), "ltlo")

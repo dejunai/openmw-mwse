@@ -84,6 +84,19 @@ All converted mods share one Mod Config Menu entry, **MW Conversions**:
 - **Do not contact the original authors** about a converted mod. Report problems to
   dej (dejunai) on the Nexus Mods forums.
 
+## For mod authors: opting out
+
+If you don't want your mod converted, add this line to the header of any Lua script in your
+mod, before the first line of code:
+
+```lua
+-- mwsuite conversion opt-out
+```
+
+It also works inside a `--[[ ]]` header comment, and case and spacing don't matter. The
+converter then refuses to convert the mod and leaves it untouched. The phrase only counts
+in the header; after the first line of code it is ignored.
+
 ## Known limits
 
 - Not provided yet: `openmw.ui`, `openmw.animation`, `openmw.ambient`, `openmw.camera`,

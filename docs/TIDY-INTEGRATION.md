@@ -14,6 +14,31 @@ omw2mwse have agreed on the following, as well as the invocation and JSON below:
   as `.esp` (and `.omwgame` as `.esm`); see "Plugins at the Data Files root".
 - tidy `--undo` uses `omw2mwse-manifest.json` until an `omw2mwse revert` command exists.
 
+## Author opt-out (`author-opt-out`)
+
+If any `.lua` file in a mod's package (declared in `.omwscripts` or not) has the phrase
+`mwsuite conversion opt-out` in its header comment block (the comments before the first line
+of code; blank lines, a BOM and a `#!` line are allowed; `--` and `--[[ ]]` comments both
+count; case and whitespace are not significant), omw2mwse does not convert the mod. It
+writes no files and moves nothing; the phrase after the first line of code does not count.
+The `--json` entry for that mod is:
+
+```json
+{
+ "name": "SomeMod", "source": "SomeMod", "status": "ok", "verdict": "blocked",
+ "reason": {"code": "author-opt-out", "file": "scripts/SomeMod/main.lua", "line": 1,
+            "message": "the mod author opted out of mwsuite conversion (scripts/SomeMod/main.lua:1); not converted"},
+ "alerts": [{"level": "error", "code": "author-opt-out", "file": "scripts/SomeMod/main.lua", "line": 1, "message": "..."}],
+ "files": {}, "plugins": [], "conflicts": [], "rewrites": [], "hardcodeLog": [], "changed": false
+}
+```
+
+Exit code is 0, as for any blocked mod. Tidy should treat it like any other blocked mod
+(move the package to `Off/` untouched) and may show `reason.code` to the user. If an
+earlier conversion's output is still present, a `previous-output-present` warning is added
+and that output is left as is. `scan --json` reports the same object as `optOut` (and the
+first blocker starts with `author-opt-out:`); `package` refuses with an error.
+
 ## Invocation
 
 ```
