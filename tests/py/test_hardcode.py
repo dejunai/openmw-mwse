@@ -1,4 +1,6 @@
 """Tests for hard-coded constant conversion, sidecars, the developer warning and `convert`."""
+from __future__ import annotations
+
 import io
 import json
 import os

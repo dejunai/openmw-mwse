@@ -1,0 +1,13 @@
+# omw2mwse: OpenMW Lua mod -> MWSE converter (stdlib only, no dependencies).
+# Run it from a checkout (bin/omw2mwse); it reads the runtime from runtime/ next to tools/,
+# so it is not packaged for pip yet. This file records the supported interpreters.
+# MIT, Copyright (c) 2026 dej (dejunai).
+[project]
+name = "omw2mwse"
+version = "0.2.3"
+description = "Convert OpenMW-only Lua mods to MWSE mods hosted by the omwcompat runtime (experimental)"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "dej (dejunai)" }]
+requires-python = ">=3.9"
+dependencies = []

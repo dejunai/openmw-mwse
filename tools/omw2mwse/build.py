@@ -457,8 +457,9 @@ def hosted_name(rel: str) -> str:
 def detect_credits(dirs) -> dict:
     """Original mod name/author/page from package metadata next to the source:
     fomod/info.xml (Name, Author, Website) or a <Mod>-metadata.toml ([package]). Best effort."""
-    import tomllib
     import xml.etree.ElementTree as ET
+
+    from . import tomlcompat
     found: dict = {}
     for d in dirs:
         d = Path(d)
@@ -478,7 +479,7 @@ def detect_credits(dirs) -> dict:
                                 found.setdefault(key, el.text.strip())
         for f in sorted(d.glob("*metadata.toml")):
             try:
-                data = tomllib.loads(f.read_text(encoding="utf-8"))
+                data = tomlcompat.loads(f.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 continue
             if str(data.get("tools", {}).get("mwse", {}).get("lua-mod", "")).startswith("mwsuite."):

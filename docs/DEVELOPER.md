@@ -3,7 +3,11 @@
 How to run the converter by hand, the tests, and what a build contains. End-user
 information is in the [README](../README.md).
 
-Requirements: Python 3.13+ (stdlib only) for `omw2mwse`, LuaJIT for the runtime tests.
+Requirements: Python 3.9+ (stdlib only, no dependencies; `requires-python = ">=3.9"` in
+`pyproject.toml`) for `omw2mwse`, developed on 3.15 and tested on 3.9 and 3.15; LuaJIT for the
+runtime tests. On 3.9/3.10 TOML is read by the built-in `tomlcompat` reader (stdlib `tomllib`
+from 3.11). Keep the code 3.9-clean: `from __future__ import annotations` in every module that
+uses `X | None` annotations, no `match`, no other 3.10+ syntax or stdlib APIs.
 
 ## Quick start
 
@@ -11,7 +15,7 @@ Requirements: Python 3.13+ (stdlib only) for `omw2mwse`, LuaJIT for the runtime 
 bin/omw2mwse scan path/to/openmw-mod
 bin/omw2mwse package path/to/openmw-mod --name ModName --out staging/ModName
 tests/run_lua_tests.sh                       # LuaJIT + MWSE mock scenarios
-python3 -m unittest discover -s tests/py     # CLI unit tests
+python3 -m unittest discover -s tests/py     # CLI unit tests (also run with python3.9)
 ```
 
 The output of `package` mirrors `Data Files`:

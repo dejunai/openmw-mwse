@@ -27,8 +27,9 @@ always the author's value). MIT, Copyright (c) 2026 dej (dejunai).
 """
 from __future__ import annotations
 
-import tomllib
 from pathlib import Path
+
+from . import tomlcompat  # tomllib on 3.11+, a small built-in reader on 3.9/3.10
 
 FIELDS_COMMON = {"key", "file", "label", "description", "min", "max", "integer", "default"}
 FIELDS_CONST = FIELDS_COMMON | {"name"}
@@ -43,8 +44,8 @@ class SidecarError(Exception):
 def load(path: Path) -> dict:
     try:
         with open(path, "rb") as f:
-            data = tomllib.load(f)
-    except (OSError, tomllib.TOMLDecodeError) as e:
+            data = tomlcompat.load(f)
+    except (OSError, ValueError) as e:   # TOMLDecodeError (either backend) is a ValueError
         raise SidecarError(f"{path}: {e}") from e
     unknown = set(data) - {"mod", "mcm", "constant", "literal"}
     if unknown:
