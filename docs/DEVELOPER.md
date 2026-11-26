@@ -16,7 +16,17 @@ bin/omw2mwse scan path/to/openmw-mod
 bin/omw2mwse package path/to/openmw-mod --name ModName --out staging/ModName
 tests/run_lua_tests.sh                       # LuaJIT + MWSE mock scenarios
 python3 -m unittest discover -s tests/py     # CLI unit tests (also run with python3.9)
+bin/omw2mwse recover path/to/staged          # report convert runs that were interrupted
+bin/omw2mwse recover path/to/staged --rollback
 ```
+
+The Python tests also run on Windows (`py -3.9 -m unittest discover -s tests/py`); the
+hard-link regression (`test_hardlink_not_modified_in_place`, and the hard link in
+`test_recovery`) needs a filesystem where the user can create hard links (NTFS does).
+Machine-readable paths follow the path contract in
+[TIDY-INTEGRATION.md](TIDY-INTEGRATION.md#path-contract-machine-readable-paths): build them
+with `build.portable_path`, and compare absolute paths in tests with Windows semantics
+(`ntpath.normcase(os.path.realpath(...))`, see `same_abs` in `tests/py/test_recovery.py`).
 
 The output of `package` mirrors `Data Files`:
 

@@ -13,6 +13,10 @@ omw2mwse have agreed on the following, as well as the invocation and JSON below:
 - tidy no longer renames plugins. omw2mwse already installs a root-level `.omwaddon`
   as `.esp` (and `.omwgame` as `.esm`); see "Plugins at the Data Files root".
 - tidy `--undo` uses `omw2mwse-manifest.json` until an `omw2mwse revert` command exists.
+  An *interrupted* run (no complete manifest) is undone with `omw2mwse recover DIR --rollback`
+  instead; see "Interrupted runs (recovery journal)".
+- All paths in `--json` and in the manifest follow the path contract below (relative,
+  forward slashes).
 
 ## Author opt-out (`author-opt-out`)
 
@@ -39,6 +43,32 @@ Exit code is 0, as for any blocked mod. Tidy should treat it like any other bloc
 `previous-output-present` warning is added and that output is left as is. `scan --json`
 reports the same object as `optOut` (the first blocker is `author-opt-out: <message>`);
 `package` refuses with the message as its error.
+
+## Path contract (machine-readable paths)
+
+Every path omw2mwse writes into `--json` output, `omw2mwse-manifest.json` and the recovery
+journal is **relative to the staged folder (`<staged-mod-dir>`), with forward slashes**, on
+every OS, for example `Off/LeaveTheLightsOff/OpenMW` or `MWSE/mods/mwsuite/openmw/X/main.lua`.
+The staged folder itself is `"."` (for example `relocatedFrom` when the package was loose at
+the folder root). This covers `mods[].source`, `off`, `relocatedFrom`, `willRelocateTo`,
+`relocated[]`, the keys of `files`, `plugins[].path` / `sourceRel`, `maxPathTooLong[]`,
+`partialApis[].uses[].file` (relative to the package folder), alert `file` / `path` fields,
+`sidecar`, `resumed.journal` and `pendingRecovery[].journal`. Join them with the staged
+folder using the OS's path functions (`os.path.join(staged, *rel.split("/"))`); compare them
+case-insensitively on Windows.
+
+Exceptions, all absolute paths in the OS's own spelling (backslashes on Windows):
+
+- top-level `dir` (the folder that was converted, as given and resolved);
+- a path outside the staged folder: `source` for an external `--source`, `sidecar` for a
+  `--sidecar` elsewhere;
+- `scan --json` `root` (the scanned folder).
+
+Compare absolute paths with Windows semantics on the PC (`os.path.normcase` after
+`os.path.realpath`: case-insensitive, either slash, 8.3 short names resolved), never as raw
+strings. `Off/<plugin>/max_path_too_long.txt` is a text file in tidy's own format
+(backslashes, see "Unified Off layout"); it is not JSON and keeps that format. Human-readable
+text (`message`, `warning`, reports) may contain any spelling and is not part of the contract.
 
 ## Invocation
 
@@ -177,13 +207,112 @@ omw2mwse outputs, such as `MWSE/mods/LTLOHandportMigration/`, are never deleted.
 - A second run with the same inputs reports every file `unchanged` and `changed: false`.
   Files omw2mwse wrote earlier but no longer produces (for example `_original/` after going
   back to `normal`) are removed, but only when they still match the manifest.
+- The manifest (and `max_path_too_long.txt`) are written the same way (temp file +
+  `os.replace`), so a reader sees the old or the new manifest, never a partial one.
+- Before the first change a recovery journal is written (next section).
+
+## Interrupted runs (recovery journal)
+
+`convert` changes a mod folder in three steps: write the outputs, relocate the original
+package to `Off/<plugin>/OpenMW/` (remove the old copies once the Off copy matches), write
+the manifest. **Before the first of them** it writes
+`MWSE/mods/mwsuite/openmw/<Mod>/.omw2mwse-recovery/journal.json`:
+
+```json
+{"tool": "omw2mwse", "format": 1, "version": "0.2.3", "mod": "Demo", "mode": "normal",
+ "source": "Off/OpenMW/Demo", "stage": "planned", "resumedFrom": null,
+ "writes":  {"MWSE/mods/mwsuite/openmw/Demo/main.lua": {"old": null, "new": "<sha256>"}},
+ "removes": {"MWSE/mods/mwsuite/openmw/Demo/omw/_original/scripts/Demo/g.lua": "<sha256>"},
+ "relocations": [{"from": "Off/OpenMW/Demo", "to": "Off/Demo/OpenMW",
+                  "files": {"Demo.omwscripts": "<sha256>", "scripts/Demo/g.lua": "<sha256>"}}],
+ "aux": {"MWSE/mods/mwsuite/openmw/Demo/omw2mwse-manifest.json": {"old": null},
+         "Off/Demo/max_path_too_long.txt": {"old": null}}}
+```
+
+`writes` are the files it creates (`old: null`) or replaces, with the SHA-256 before and
+after; `removes` the owned files it deletes; `relocations` the originals it removes from
+their old place (the Off copy has the same hash); `aux` the manifest and the MAX_PATH list.
+Replaced and removed files and the previous manifest are copied first to
+`.omw2mwse-recovery/backup/<sha256>` (content-addressed names, never `main.lua` or `.lua`, so
+MWSE does not run them). `stage` moves `planned` -> `outputs-written` -> `relocated` ->
+`manifest-written`; the whole `.omw2mwse-recovery/` folder is deleted when the run completes.
+**A folder that still has a journal is an unfinished run.** Tidy should not move, sweep or
+hash `.omw2mwse-recovery/` (it is not listed in the manifest).
+
+Recovery, either way:
+
+- **Finish:** run `convert` again with the same options. It first completes the recorded
+  relocation (only originals that still match their hash, and only when the Off copy matches),
+  treats files the interrupted run already wrote as its own (no `conflict`), and then runs
+  normally; the result equals an uninterrupted run, and a further run is a no-op. The mod's
+  entry gets `"resumed": {"stage": "<stage reached>", "journal": "<path>"}`.
+- **Roll back:** `omw2mwse recover DIR --rollback [--name MOD] [--json]` copies originals
+  back from Off/, deletes created files, restores replaced/removed files and the previous
+  manifest from backup, and removes the journal. If a run was interrupted twice, the rollback
+  still returns to the state before the first one. A file changed by hand since the
+  interruption is left alone and listed in `kept`.
+- `omw2mwse recover DIR [--json]` without `--rollback` only reports.
+
+Every `convert` result carries `"pendingRecovery": [...]` (empty when nothing is unfinished):
+
+```json
+"pendingRecovery": [{"mod": "Demo", "stage": "planned", "mode": "normal",
+                     "journal": "MWSE/mods/mwsuite/openmw/Demo/.omw2mwse-recovery/journal.json",
+                     "writes": 41, "removes": 0, "relocations": 2}]
+```
+
+`recover --json` prints `{"command": "recover", "dir", "rollback", "rolledBack": [{"mod",
+"stage", "restored": [paths], "removed": [paths], "kept": [{"path", "reason"}]}],
+"pendingRecovery": [...], "alerts": [...], "exitCode"}`. A `--dry-run` convert with a
+pending journal changes nothing and adds a top-level `interrupted-run-pending` warning; a run
+that cannot proceed for that mod (conflict, refused, opt-out) adds the same alert to the mod.
+
+Suggested tidy flow: write tidy's own intent before calling convert (as today). If the call
+dies or the result has a non-empty `pendingRecovery`, either re-run the same convert (finish)
+or call `recover --rollback` (undo), then reconcile the tidy intent with the outcome. A killed
+process can leave `.omw2mwse-*.tmp` files; they are never outputs and can be deleted.
+
+## Partially supported APIs (`partialApis`)
+
+`verdict` is unchanged (`ready`, `blocked` or `no-lua`; tidy still treats a `partial` verdict
+as converted if one ever appears). Next to it, every `mods[]` entry of `convert --json` (and
+every `scan --json` result) has `partialApis`: each OpenMW API the mod uses whose omwcompat
+status is `partial`, so testers know what to try first in game. Additive; nothing else changed.
+
+```json
+"partialApis": [
+ {"api": "openmw.core.weather.getTransition", "kind": "symbol", "count": 1,
+  "uses": [{"file": "scripts/LeaveTheLightsOff/LTLO_g.lua", "line": 378}],
+  "missing": "read from MWSE's weather controller; getTransition is 1 - transitionScalar (direction not yet confirmed in game); nil in cells without sky"},
+ {"api": "GameObject:remove", "kind": "method", "count": 3,
+  "uses": [{"file": "scripts/LeaveTheLightsOff/LTLO_g.lua", "line": 289}, {"file": "scripts/LeaveTheLightsOff/LTLO_g.lua", "line": 437}],
+  "missing": "R1: content refs disabled + tombstoned, created refs deleted"},
+ {"api": "scriptFlag:CREATURE", "kind": "scriptFlag", "count": 1, "uses": [],
+  "missing": "NPC/CREATURE/ACTOR/CONTAINER/DOOR/LIGHT/ACTIVATOR scripts run per object while it is in an active cell; ..."}
+]
+```
+
+- `api`: the dotted OpenMW name; GameObject methods are `GameObject:<name>`, script flags
+  `scriptFlag:<FLAG>`, engine handlers `engineHandler:<name>`, settings renderers
+  `settingsRenderer:<name>`.
+- `kind`: `symbol`, `method`, `scriptFlag`, `engineHandler` or `settingsRenderer`.
+- `count`: total uses in the scripts that load (same counting as `coverage`).
+- `uses`: up to 20 distinct `{file, line}` (file relative to the package folder, forward
+  slashes); `[]` for kinds whose position is not tracked (flags, handlers, renderers).
+- `missing`: a short, rule-based note on what omwcompat does differently.
+- Sorted by kind (symbols, methods, handlers, flags, renderers), then by `api`. Present (possibly
+  `[]`) on every `status: ok` entry, blocked mods included.
+- **Author opt-out:** always `"partialApis": []`; no file, line or text is ever reported for an
+  opted-out mod.
+
+The same list is in `OMW2MWSE-REPORT.md` and the `scan` markdown ("Partially supported APIs").
 
 ## JSON result (abridged)
 
 ```json
 {
  "tool": "omw2mwse", "version": "0.2.3", "command": "convert", "mode": "normal",
- "dir": "...", "dryRun": false, "changed": true, "exitCode": 0, "alerts": [],
+ "dir": "...", "dryRun": false, "changed": true, "exitCode": 0, "alerts": [], "pendingRecovery": [],
  "mods": [{
    "name": "LeaveTheLightsOff", "source": "Off/LeaveTheLightsOff/OpenMW",
    "off": "Off/LeaveTheLightsOff/OpenMW",
@@ -194,6 +323,9 @@ omw2mwse outputs, such as `MWSE/mods/LTLOHandportMigration/`, are never deleted.
    "files": {"MWSE/mods/mwsuite/openmw/LeaveTheLightsOff/main.lua": "created"},
    "newGameRequired": false,
    "notice": "Unofficial mwsuite conversion of ... (original author: ...). Unofficial conversion by mwsuite. Do not contact the original author about it. Support: dej (dejunai) via the Nexus Mods forums.",
+   "partialApis": [{"api": "openmw.vfs.open", "kind": "symbol", "count": 1,
+                    "uses": [{"file": "scripts/LeaveTheLightsOff/LTLO_g.lua", "line": 201}],
+                    "missing": "loose files only (BSA contents cannot be read); ..."}],
    "plugins": [
      {"name": "No Fires in Bad Weather.esp", "source": "No Fires in Bad Weather.omwaddon",
       "sourceRel": "No Fires in Bad Weather.omwaddon", "kind": "esp",
@@ -213,7 +345,7 @@ omw2mwse outputs, such as `MWSE/mods/LTLOHandportMigration/`, are never deleted.
 
 `status` is `ok`, `conflict` or `refused`. Alert codes: `hardcode-candidate`, `blocker`
 (the mod will not run fully), `scan-warning`, `settings-renderer-fallback`, `mesh-missing`,
-`duplicate-source`, `sidecar-ignored`, `hardcode-none`, `no-openmw-scripts`.
+`duplicate-source`, `sidecar-ignored`, `hardcode-none`, `no-openmw-scripts`, `interrupted-run-pending`.
 On a first run that relocates a legacy `Off/OpenMW/<Mod>/` (or other in-folder) package,
 `source` is the canonical `Off/<Mod>/OpenMW` path and `relocatedFrom` names the previous
 location. A `--dry-run` reports `willRelocateTo` instead and writes nothing.

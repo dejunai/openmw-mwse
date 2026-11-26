@@ -1,4 +1,4 @@
-"""Command line entry point: `python -m omw2mwse scan|package|convert ...`.
+"""Command line entry point: `python -m omw2mwse scan|package|convert|recover ...`.
 
 Tidy-style invocation is also accepted:
     omw2mwse --convert-omwscripts[=normal|hardcode] <staged-mod-dir> [convert options]
@@ -16,6 +16,7 @@ from . import sidecar as SC
 from . import warn
 from .build import BuildError
 from .convert import EXIT_ERROR, EXIT_REFUSED, MODES, convert
+from . import recovery as RC
 from .package import PackageError, package
 from .scan import load_manifest, render_markdown, scan_mod
 
@@ -120,6 +121,46 @@ def cmd_convert(a) -> int:
     return r["exitCode"]
 
 
+def cmd_recover(a) -> int:
+    """Report (default) or roll back convert runs that did not finish (recovery journals)."""
+    staged = Path(a.dir).resolve()
+    r = {"tool": "omw2mwse", "version": __version__, "requiresPython": REQUIRES_PYTHON, "command": "recover",
+         "dir": str(staged), "rollback": bool(a.rollback), "rolledBack": [], "pendingRecovery": [], "alerts": [],
+         "exitCode": 0}
+    if not staged.is_dir():
+        r["alerts"].append({"level": "error", "code": "error", "message": f"{staged} is not a directory"})
+        r["exitCode"] = EXIT_ERROR
+    else:
+        for j in RC.pending(staged):
+            if a.name and j.get("mod") != a.name:
+                continue
+            if a.rollback:
+                if j.get("stage") == "unreadable":
+                    r["alerts"].append({"level": "error", "code": "journal-unreadable",
+                                        "path": RC.describe(j, staged)["journal"],
+                                        "message": "the recovery journal cannot be read; nothing was rolled back"})
+                    r["exitCode"] = EXIT_ERROR
+                    continue
+                r["rolledBack"].append(RC.rollback(staged, j))
+        r["pendingRecovery"] = [RC.describe(j, staged) for j in RC.pending(staged)]
+    if a.json:
+        print(json.dumps(r, indent=1))
+    else:
+        for al in r["alerts"]:
+            print(f"{al['level']}: {al['message']}")
+        for rb in r["rolledBack"]:
+            print(f"{rb['mod']}: rolled back (was at stage {rb['stage']}): restored {len(rb['restored'])}, "
+                  f"removed {len(rb['removed'])}, left alone {len(rb['kept'])}")
+            for k in rb["kept"]:
+                print(f"  left alone: {k['path']}: {k['reason']}")
+        for p in r["pendingRecovery"]:
+            print(f"{p['mod']}: unfinished convert run (stage {p['stage']}); run convert again to finish it, "
+                  "or recover --rollback to undo it")
+        if not r["rolledBack"] and not r["pendingRecovery"] and not r["alerts"]:
+            print("nothing to recover")
+    return r["exitCode"]
+
+
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="omw2mwse", description="Scan, package and convert OpenMW Lua mods for MWSE (omwcompat).")
     ap.add_argument("--version", action="version", version=f"omw2mwse {__version__}")
@@ -170,6 +211,14 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--meshes-from", help="extra Data Files/meshes folder to copy long-path meshes from")
     hard_opts(c)
     c.set_defaults(func=cmd_convert)
+
+    rv = sub.add_parser("recover", help="report or roll back convert runs that were interrupted")
+    rv.add_argument("dir", help="staged mod folder given to convert")
+    rv.add_argument("--rollback", action="store_true",
+                    help="undo unfinished runs (default: only report them; re-running convert finishes them)")
+    rv.add_argument("--name", help="only this mod (the MWSE/mods/mwsuite/openmw/<Mod> name)")
+    rv.add_argument("--json", action="store_true")
+    rv.set_defaults(func=cmd_recover)
     return ap
 
 

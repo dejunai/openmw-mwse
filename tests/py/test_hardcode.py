@@ -239,7 +239,7 @@ class Convert(unittest.TestCase):
             self.assertIn('apply = "live"', main_lua)
             rep = (omw.parent / "OMW2MWSE-REPORT.md").read_text(encoding="utf-8")
             self.assertIn("**rewritten**", rep)
-            self.assertEqual(r["mods"][0]["sidecar"], str(root / "Demo.omw2mwse.toml"))
+            self.assertEqual(r["mods"][0]["sidecar"], "Demo.omw2mwse.toml")  # staged-relative (path contract)
 
     def test_hardcode_auto_pick_logs(self):
         with tempfile.TemporaryDirectory() as t:

@@ -27,7 +27,7 @@ import os
 import re
 import tempfile
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
 
 from . import __version__
 from . import constants as K
@@ -62,6 +62,51 @@ def mesh_alias(slug: str, normalized: str) -> str:
 
 def lua_str(s: str) -> str:
     return '"' + s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n") + '"'
+
+
+def atomic_write_bytes(p: Path, data: bytes, verify: bool = False) -> None:
+    """Write data to p through a temp file in the same folder and os.replace it over p.
+
+    Readers see either the old or the new file, never a partial one, and an existing hard
+    link (e.g. a Vortex deployment of a staging file) keeps pointing at the old content
+    instead of being modified in place. The temp file is removed if anything fails."""
+    p = Path(p)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=p.parent, prefix=".omw2mwse-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, p)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
+    if verify and p.read_bytes() != data:
+        raise BuildError(f"write verification failed for {p}")
+
+
+def portable_path(p, root) -> str:
+    """The machine-readable form of a path for --json and the manifest (the path contract):
+    relative to root with forward slashes ("." for root itself) when p is inside root, else
+    the absolute path as the OS spells it. Works for PurePosixPath and PureWindowsPath alike
+    (the Windows case is compared case-insensitively, as NTFS does)."""
+    pp, rr = p, root
+    if not isinstance(pp, PurePath):
+        pp = Path(pp)
+    if not isinstance(rr, PurePath):
+        rr = type(pp)(rr)
+    try:
+        rel = pp.relative_to(rr)
+    except ValueError:
+        if isinstance(pp, PureWindowsPath):
+            a, b = str(pp).lower(), str(rr).lower().rstrip("\\")
+            if a == b or a.startswith(b + "\\"):
+                rel = PurePosixPath(*pp.parts[len(rr.parts):]) if a != b else PurePosixPath(".")
+                return rel.as_posix()
+        return str(pp)
+    return rel.as_posix() if rel.parts else "."
 
 
 def sha256b(b: bytes) -> str:
@@ -250,18 +295,9 @@ class Writer:
             if self.status.get(rel) == "unchanged":
                 continue
             p = self.root / rel
-            p.parent.mkdir(parents=True, exist_ok=True)
             # write a temp file then rename over: an existing hardlink (e.g. Vortex deployment)
             # keeps pointing at the old content instead of being modified in place
-            fd, tmp = tempfile.mkstemp(dir=p.parent, prefix=".omw2mwse-", suffix=".tmp")
-            try:
-                with os.fdopen(fd, "wb") as f:
-                    f.write(data)
-                os.replace(tmp, p)
-            except BaseException:
-                if os.path.exists(tmp):
-                    os.remove(tmp)
-                raise
+            atomic_write_bytes(p, data)
             if p.read_bytes() != data:
                 raise BuildError(f"write verification failed for {rel}")
         for rel, st in list(self.status.items()):
