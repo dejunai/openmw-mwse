@@ -8,12 +8,28 @@ local objects = require("omwcompat.objects")
 local settings = require("omwcompat.settings")
 local conversions = require("omwcompat.conversions")
 local actors = require("omwcompat.actors")
+local timing = require("omwcompat.timing")
+local guards = require("omwcompat.guards")
 
-local RT = { VERSION = "0.3.1", API_REVISION = 70, PROBE_API_REVISION = 100 }
+local RT = { VERSION = "0.3.2", API_REVISION = 70, PROBE_API_REVISION = 100 }
 local LOCAL_FLAG_NAMES
 objects.init(RT)
 settings.init(RT)
 actors.init(RT, objects)
+guards.init(RT, objects)
+timing.version = RT.VERSION
+timing.guardStats = function()
+    local out = {}
+    for _, st in pairs(guards.stats) do
+        out[#out + 1] = { mod = st.mod, script = st.script, dedupeSkipped = st.dedupeSkipped,
+            shiftRevisits = st.shiftRevisits, nextRestarts = st.nextRestarts }
+    end
+    table.sort(out, function(a, b) return a.mod .. a.script < b.mod .. b.script end)
+    return out
+end
+RT.timing = timing
+RT.guards = guards
+RT.getTimings = timing.snapshot
 
 local mods = {}            -- registered mods, in registration order
 local state = {
@@ -35,7 +51,7 @@ RT._state = state
 
 ---------------------------------------------------------------- logging
 local warned = {}
-local errCount = {}
+local errCount = timing.errors   -- where -> count; shared with timing snapshots
 function RT.log(fmt, ...)
     if not RT.debug then return end
     mwse.log("[omwcompat] " .. string.format(fmt, ...))
@@ -46,16 +62,27 @@ function RT.warnOnce(key, fmt, ...)
     warned[key] = true
     RT.warn(fmt, ...)
 end
+-- The first error of each `where` is logged with a traceback; errors 2-5 with the message
+-- only; later ones are just counted (timing snapshots carry the counts). A traceback is
+-- built only for the first error of a `where`, so a handler that fails every frame stays cheap.
 local function reportError(where, err)
     local n = (errCount[where] or 0) + 1
     errCount[where] = n
     if n <= 5 then
         mwse.log("[omwcompat] ERROR in %s: %s", where, tostring(err))
-        if n == 5 then mwse.log("[omwcompat] (further errors in %s suppressed)", where) end
+        if n == 5 then mwse.log("[omwcompat] (further errors in %s suppressed; they are counted)", where) end
     end
 end
+local currentWhere
+local function onError(e)
+    if errCount[currentWhere] then return e end   -- seen before: no traceback
+    return debug.traceback(e, 2)
+end
 local function safecall(where, f, ...)
-    local ok, a, b = xpcall(f, function(e) return debug.traceback(e, 2) end, ...)
+    local prev = currentWhere
+    currentWhere = where
+    local ok, a, b = xpcall(f, onError, ...)
+    currentWhere = prev
     if not ok then reportError(where, a); return false end
     return true, a, b
 end
@@ -627,6 +654,7 @@ local function makeEnv(m, S)
         cache[name] = mod
         return mod
     end
+    guards.apply(env, S)   -- rule-based workarounds omw2mwse switched on for this script
     return env
 end
 
@@ -643,7 +671,8 @@ end
 local LOCAL_KNOWN = { onUpdate = 1, onSave = 1, onLoad = 1, onInit = 1, onActive = 1, onInactive = 1, onActivated = 1,
     onInterfaceOverride = 1 }
 local function instantiate(m, spec, probe, selfRef)
-    local S = { path = spec.path, flags = spec.flags, callbacks = {}, mod = m, probe = probe }
+    local S = { path = spec.path, flags = spec.flags, callbacks = {}, mod = m, probe = probe, timing = {} }
+    if not probe then S.guards = guards.normalize(S, spec.guards) end
     if selfRef then
         S.isLocal = true
         S.self = objects.selfOf(selfRef)
@@ -687,11 +716,39 @@ local function instantiate(m, spec, probe, selfRef)
     return S
 end
 
+-- Calls one engine handler of a script: timed (omwcompat.timing), with the activeDedupe
+-- guard told that an onObjectActive/onActorActive/onItemActive handler is running.
+local clock = timing.clock
+local ACTIVE_HANDLERS = guards.ACTIVE_HANDLERS
+local function callHandler(S, name, h, ...)
+    local e = S.timing[name]
+    if not e then
+        e = timing.entry(S.mod.name, S.path, name, S.isLocal)
+        S.timing[name] = e
+    end
+    local depth = S.activeDepth
+    if depth and ACTIVE_HANDLERS[name] then S.activeDepth = depth + 1 else depth = nil end
+    local ok, a, b
+    if timing.enabled then
+        local t0 = clock()
+        ok, a, b = safecall(e.where, h, ...)
+        local d = clock() - t0
+        e.calls = e.calls + 1
+        e.total = e.total + d
+        if d > e.max then e.max = d end
+    else
+        ok, a, b = safecall(e.where, h, ...)
+    end
+    if depth then S.activeDepth = depth end
+    return ok, a, b
+end
+RT.callHandler = callHandler
+
 local function callAll(name, ...)
     for _, m in ipairs(mods) do
         for _, S in ipairs(m.scripts) do
             local h = S.engineHandlers[name]
-            if h then safecall(S.path .. " " .. name, h, ...) end
+            if h then callHandler(S, name, h, ...) end
         end
     end
 end
@@ -896,7 +953,7 @@ function RT.attachLocal(ref)
     end
     for _, S in ipairs(inst.scripts) do
         local h = S.engineHandlers.onActive
-        if h then safecall(S.path .. " onActive", h) end
+        if h then callHandler(S, "onActive", h) end
     end
 end
 
@@ -906,7 +963,7 @@ function RT.detachLocal(key)
     state.localActive[key] = nil
     for _, S in ipairs(inst.scripts) do
         local h = S.engineHandlers.onInactive
-        if h then safecall(S.path .. " onInactive", h) end
+        if h then callHandler(S, "onInactive", h) end
         RT.storeLocal(S, inst)
         S.dead = true
     end
@@ -931,7 +988,7 @@ function RT.updateLocals(dt)
         elseif dt > 0 then
             for _, S in ipairs(inst.scripts) do
                 local h = S.engineHandlers.onUpdate
-                if h and not S.dead then safecall(S.path .. " onUpdate", h, dt) end
+                if h and not S.dead then callHandler(S, "onUpdate", h, dt) end
             end
         end
     end
@@ -1041,8 +1098,29 @@ function RT.onActivate(e)
 end
 
 ---------------------------------------------------------------- frame
+local timingLogAt = nil
+local function maybeLogTiming()
+    local every = timing.logEvery
+    if not every or every <= 0 then return end
+    local now = clock()
+    if not timingLogAt then timingLogAt = now + every; timing.delta("log"); return end
+    if now < timingLogAt then return end
+    timingLogAt = now + every
+    mwse.log("[omwcompat %s] timing: %s", RT.VERSION, timing.line("log", 5))
+end
+local frameWork
 function RT.onEnterFrame(e)
     if not state.ready or not tes3.player then return end
+    if timing.enabled then
+        local t0 = clock()
+        frameWork(e)
+        timing.addFrame(clock() - t0)
+        maybeLogTiming()
+    else
+        frameWork(e)
+    end
+end
+frameWork = function(e)
     state.frame = state.frame + 1
     local nf = state.nextFrame
     if #nf > 0 then
@@ -1092,7 +1170,7 @@ function RT.reloadMod(m)
                 local w = objects.wrap(ref)
                 for _, S in ipairs(m.scripts) do
                     local h = S.engineHandlers.onObjectActive
-                    if h then RT.defer(function() if w:isValid() then safecall(S.path .. " onObjectActive", h, w) end end) end
+                    if h then RT.defer(function() if w:isValid() then callHandler(S, "onObjectActive", h, w) end end) end
                 end
             end
         end
@@ -1144,9 +1222,18 @@ end
 
 ---------------------------------------------------------------- registration
 local wired = false
+-- Data Files/MWSE/config/omwcompat.json (optional, never written by omwcompat):
+--   { "timing": true, "timingLogSeconds": 0 }
+function RT.loadTimingConfig()
+    local ok, cfg = pcall(mwse.loadConfig, "omwcompat", { timing = true, timingLogSeconds = 0 })
+    if not ok or type(cfg) ~= "table" then return end
+    timing.setEnabled(cfg.timing ~= false)
+    timing.logEvery = tonumber(cfg.timingLogSeconds) or 0
+end
 local function wire()
     if wired then return end
     wired = true
+    RT.loadTimingConfig()
     event.register(tes3.event.initialized, function() objects.initTypes(); actors.extendTypes(objects.types) end, { priority = 1000 })
     event.register(tes3.event.loaded, RT.onLoaded, { priority = -100 })
     event.register(tes3.event.save, RT.onSave, { priority = 100 })

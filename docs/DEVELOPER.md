@@ -42,6 +42,27 @@ MESH-ALIASES.txt                             long mesh path -> short alias
 OMW2MWSE-REPORT.md                           scan + file list with hashes
 ```
 
+## Rule-based guards and timing (0.2.4 / omwcompat 0.3.2)
+
+- `tools/omw2mwse/patterns.py` detects the `active-collect-dedupe` and `mutate-during-iteration`
+  patterns (token based, per file). `scan.pattern_findings` maps findings to declared scripts
+  through `scan.script_closures` (a script gets the guards of every file it loads); the result
+  is `ModScan.patterns` / `ModScan.guards`, `partialApis` entries of kind `pattern`
+  (`scan.pattern_partials`, notes in `PATTERN_NOTES`), `guards` in `--json`, report notes, and
+  `guards = { ... }` per script in `main.lua` (`build.render_main`). Contract:
+  [TIDY-INTEGRATION.md](TIDY-INTEGRATION.md#rule-based-workarounds-pattern-entries-and-guards-024--omwcompat-032).
+- The runtime side is `omwcompat/guards.lua`; timing counters are `omwcompat/timing.lua`
+  (see [RUNTIME.md](RUNTIME.md#timing-counters-032)).
+- Tests: `tests/py/test_patterns.py` (detector, scan, convert JSON, `main.lua`, report),
+  `tests/lua/test_guards.lua` (guards with and without, on `tests/fixtures/active-collect`, a
+  fixture written for the tests and modeled on the No Fires in Bad Weather pattern) and
+  `tests/lua/test_timing.lua` (timing, periodic log, one traceback per site, factions).
+  `tests/run_lua_tests.sh` rebuilds `staging/LeaveTheLightsOff` when the runtime in it is older
+  than `runtime/`, so the Lua suites always run against the current runtime.
+- To add a rule: a detector in `patterns.py` (with a `GUARD_FOR_RULE` entry and a
+  `PATTERN_NOTES` text), the guard in `guards.lua` (`KNOWN`, `RULE_IDS`, `apply`), tests on
+  both sides. Never patch a mod's Lua.
+
 ## Further reading
 
 - [RUNTIME.md](RUNTIME.md): how the emulation works, local scripts, object-lifecycle rules.

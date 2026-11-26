@@ -12,6 +12,9 @@ It runs OpenMW GLOBAL scripts unmodified. Version 0.1.0 (MVP).
 | `omwcompat/objects.lua` | GameObject, Cell, Record and Inventory wrappers, `openmw.types`, lifecycle rules R1-R3. |
 | `omwcompat/serial.lua` | Serializer for OpenMW "serializable data" into one Lua-literal string. |
 | `omwcompat/util.lua` | `openmw.util`: vectors, transforms, colors, helpers. |
+| `omwcompat/actors.lua` | Actor APIs: stats, `isDead`, factions (0.3.2), `openmw.nearby`, `I.AI`. |
+| `omwcompat/guards.lua` | Rule-based guards `activeDedupe` / `safeIteration` (0.3.2). |
+| `omwcompat/timing.lua` | Per-script handler timing counters (0.3.2). |
 | `omwcompat/manifest.json` | Support status of each symbol. The `omw2mwse scan` command reads it. |
 
 A packaged mod adds `MWSE/mods/mwsuite/openmw/<Mod>/main.lua`, which calls:
@@ -50,7 +53,10 @@ The complete original package is `Off/<Mod>/OpenMW/<original paths>`.
   4. Tick the timers.
   5. Call `onUpdate(dt)`. `dt` is 0 in menu mode, which matches OpenMW's paused world.
 - `referenceActivated` queues `onObjectActive`. Tombstoned, disabled and deleted references are skipped.
-- Every handler runs inside `xpcall`. Errors go to MWSE.log, at most 5 per site.
+- Every handler runs inside `xpcall`. Errors go to MWSE.log, at most 5 per site; only the
+  first error of a site gets a `debug.traceback` (0.3.2), later ones are logged with the
+  message only (2-5) or just counted, so a handler that fails every frame stays cheap. The
+  counts are in the timing snapshot (`errors`).
 
 ## Local scripts (0.3.0)
 
@@ -81,7 +87,7 @@ The scanner checks the same scopes: `openmw.self`/`openmw.nearby` in a GLOBAL sc
 
 ## Runtime version check (0.3.1)
 
-Each generated `main.lua` declares the omwcompat it was built with (`local BUILT_FOR = "0.3.1"`,
+Each generated `main.lua` declares the omwcompat it was built with (`local BUILT_FOR = "0.3.2"`,
 also passed to `register` as `runtimeVersion`). Vortex deploys one copy of the shared
 `MWSE/lib/omwcompat` files, so a mod may run on a different runtime. When `omwcompat.VERSION`
 differs, `main.lua` writes exactly one line to MWSE.log, e.g.
@@ -89,6 +95,60 @@ differs, `main.lua` writes exactly one line to MWSE.log, e.g.
 in `main.lua` so it works with older runtimes too. Nothing is logged when they match. If the
 loaded runtime cannot host some of the mod's script flags, its "not hosted" warning ends with
 `(built for omwcompat X, loaded Y)` (runtimes 0.3.1 and later).
+
+## Guards (0.3.2)
+
+omw2mwse detects two patterns statically (`tools/omw2mwse/patterns.py`, see
+[TIDY-INTEGRATION.md](TIDY-INTEGRATION.md#rule-based-workarounds-pattern-entries-and-guards-024--omwcompat-032))
+and writes `guards = { ... }` next to the script in `main.lua`. The runtime then gives that
+script's environment (and the modules it `require`s) guarded standard functions; the mod's
+Lua is never edited and scripts without guards get the plain functions.
+
+- `activeDedupe`: `table.insert(list, obj)` with a GameObject that is already in `list`
+  (`rawequal`) is skipped while the script's `onObjectActive` / `onActorActive` /
+  `onItemActive` handler runs. GameObjects are cached per reference id (`objects.wrap`), so the
+  same reference is the same table, before and after its cell is unloaded and loaded again.
+  Inserts at other times are unchanged.
+- `safeIteration`: the script's `next`, `pairs` and `ipairs` (plain tables only; tables with a
+  metatable use the normal functions) and `table.remove`. Removing the element a traversal
+  just returned makes the next step visit the element that shifted into its slot instead of
+  skipping it (for-in loops and `k = next(t, k)` cursors kept between frames alike);
+  `next(t, k)` with a key that is no longer in the table restarts from the first key instead
+  of raising "invalid key to 'next'".
+
+The first time a guard changes something for a script, one WARNING line names the script and
+the rule; later cases are counted (`omwcompat.guards.stats`, and `guards` in timing snapshots).
+
+## Timing counters (0.3.2)
+
+`callAll` (global scripts' engine handlers) and `updateLocals` (local scripts' `onUpdate`), and
+local `onActive` / `onInactive`, are timed per mod + script + handler: `calls`, `total` and
+`max` seconds (local instances of one script share an entry). `frame` is all omwcompat work in
+one `enterFrame` (event delivery, timers and deferred calls included). The clock is
+`QueryPerformanceCounter` through LuaJIT ffi on Windows when available, else `os.clock`.
+
+```lua
+local omwc = include("omwcompat")            -- nil when no converted mod is installed
+if omwc and omwc.timing then
+    local snap = omwc.timing.snapshot()      -- cumulative since load / reset
+    -- snap = { version, clock, enabled, since, elapsed, frame = { frames, total, max },
+    --          scripts = { { mod, script, handler, isLocal, calls, total, max, errors }, ... },  -- slowest first
+    --          guards = { { mod, script, dedupeSkipped, shiftRevisits, nextRestarts }, ... } }
+    local d = omwc.timing.delta("mwhangwatch")   -- same shape, calls/total/frames since this consumer's last call
+    local line = omwc.timing.line("mwhangwatch", 5)  -- one line: ms/frame + the 5 slowest handlers
+end
+```
+
+`omwcompat.getTimings` is `timing.snapshot`; `timing.reset()` and `timing.setEnabled(on)` exist
+too. Each `delta` / `line` consumer name has its own window, so several readers do not disturb
+each other. An optional periodic line goes to MWSE.log when
+`Data Files/MWSE/config/omwcompat.json` holds `{ "timingLogSeconds": 10 }` (0 or no file: off);
+`"timing": false` turns the counters off. omwcompat never writes that file.
+
+mwhangwatch (mwsuite, not changed here) already logs one line per second from its `enterFrame`
+hook and looks up other suite mods with `include()`; adding
+`log("  %s", omwc.timing.line("mwhangwatch", 5))` next to its fps line would put omwcompat's
+share of each second in `mwhangwatch.log`.
 
 ## Save data
 

@@ -1,6 +1,6 @@
 {
  "runtime": "omwcompat",
- "version": "0.3.1",
+ "version": "0.3.2",
  "statuses": {
   "full": "emulated with OpenMW semantics",
   "partial": "emulated with documented differences",
@@ -192,8 +192,11 @@
   "openmw.types.Miscellaneous.objectIsInstance": "full",
   "openmw.types.Miscellaneous.record": "partial",
   "openmw.types.Miscellaneous.records": "partial",
+  "openmw.types.NPC.getFactionRank": "full",
+  "openmw.types.NPC.getFactions": "full",
   "openmw.types.NPC.inventory": "partial",
   "openmw.types.NPC.isDead": "full",
+  "openmw.types.NPC.isExpelled": "partial",
   "openmw.types.NPC.objectIsInstance": "full",
   "openmw.types.NPC.record": "partial",
   "openmw.types.NPC.records": "partial",
@@ -212,8 +215,11 @@
   "openmw.types.NPC.stats.dynamic.fatigue": "partial",
   "openmw.types.NPC.stats.dynamic.health": "partial",
   "openmw.types.NPC.stats.dynamic.magicka": "partial",
+  "openmw.types.Player.getFactionRank": "full",
+  "openmw.types.Player.getFactions": "full",
   "openmw.types.Player.inventory": "partial",
   "openmw.types.Player.isDead": "full",
+  "openmw.types.Player.isExpelled": "partial",
   "openmw.types.Player.objectIsInstance": "full",
   "openmw.types.Player.record": "partial",
   "openmw.types.Player.records": "partial",
@@ -404,5 +410,10 @@
   "MWUI": "player",
   "SkillProgression": "player",
   "Settings": "any"
- }
+ },
+ "guards": {
+  "activeDedupe": "table.insert of a GameObject already in the list is skipped while the script's onObjectActive/onActorActive/onItemActive runs",
+  "safeIteration": "next/pairs/ipairs survive table.remove of the element just visited (the shifted element is visited, a vanished next() key restarts the traversal)"
+ },
+ "timing": "per script and handler calls/total/max seconds; omwcompat.timing.snapshot()/delta(consumer)/line(consumer, n); optional MWSE.log line every timingLogSeconds (config/omwcompat.json)"
 }

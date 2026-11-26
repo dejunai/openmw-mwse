@@ -74,7 +74,9 @@
   - `I.Settings` only records defaults.
   - `core.l10n` returns the key itself.
   - `API_REVISION` is a fixed 70.
-- `types.*` covers records, `objectIsInstance` and inventories (`countOf` only). Stats, factions,
+- `types.*` covers records, `objectIsInstance` and inventories (`countOf` only), actor stats
+  and, from 0.3.2, `NPC.getFactions` / `getFactionRank` / `isExpelled` (a regular NPC has its
+  record's one faction; NPC expulsion is not tracked). Faction records (`core.factions`),
   spells, `Lockable` and others are absent.
 - `Transform` composition is exact only for single-axis rotations. LTLO only copies rotations,
   so it is not affected.

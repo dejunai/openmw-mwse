@@ -3,6 +3,7 @@
 --   types.Actor.stats.attributes.<name>(actor)                 -> mobile.<name>  (tes3statistic)
 --   types.Actor.stats.ai.<fight|flee|alarm|hello>(actor)       -> mobile.<stat>, base from aiConfig
 --   types.Actor.isDead(actor)                                  -> mobile.isDead
+--   types.NPC.getFactions / getFactionRank / isExpelled        -> npc.faction / factionRank, player faction flags
 --   openmw.nearby                                              -> references in tes3.getActiveCells()
 --   I.AI (actor local scripts)                                 -> mobile:startCombat / tes3.setAI* / aiPlanner
 -- Every mapping is by rule (OpenMW name -> MWSE field), never per mod. Actors whose
@@ -137,6 +138,79 @@ function M.isDead(actor)
     return false
 end
 
+---------------------------------------------------------------- factions
+-- types.NPC.getFactions(actor) -> list of lower-case faction ids the NPC is a member of
+-- (OpenMW: expelled state not taken into account). A regular NPC has at most one faction
+-- (its record's); the player has every faction with playerJoined set.
+-- types.NPC.getFactionRank(actor, id) -> rank index from 1, 0 if not a member; raises for an
+-- unknown faction id like OpenMW. types.NPC.isExpelled(actor, id): the player's
+-- playerExpelled flag; NPCs are never expelled in vanilla data (false).
+local function lowerId(x) return type(x) == "string" and x:lower() or nil end
+local function factionList()
+    local ok, list = pcall(function() return tes3.dataHandler.nonDynamicData.factions end)
+    return ok and list or nil
+end
+local function factionOf(id)
+    local f
+    if type(id) == "string" and tes3.getFaction then
+        local ok, r = pcall(tes3.getFaction, id)
+        if ok then f = r end
+    end
+    if not f and type(id) == "string" then
+        local want = id:lower()
+        local list = factionList()
+        if list then
+            for _, x in ipairs(list) do if lowerId(x.id) == want then f = x; break end end
+        end
+    end
+    if not f then error("no such faction: " .. tostring(id), 3) end
+    return f
+end
+local function isPlayerRef(ref) return ref ~= nil and ref == tes3.player end
+local function npcFaction(ref)
+    local o = ref and ref.object
+    if not o then return nil, nil end
+    local ok, f, r = pcall(function() return o.faction, o.factionRank end)
+    if not ok or not f then
+        local b = baseObject(ref)
+        ok, f, r = pcall(function() return b.faction, b.factionRank end)
+        if not ok then return nil, nil end
+    end
+    return f, r
+end
+function M.getFactions(actor)
+    local ref = objects.refOf(actor)
+    local out = {}
+    if not ref then return out end
+    if isPlayerRef(ref) then
+        for _, f in ipairs(factionList() or {}) do
+            if f.playerJoined then out[#out + 1] = lowerId(f.id) end
+        end
+        return out
+    end
+    local f = npcFaction(ref)
+    if f and f.id then out[1] = lowerId(f.id) end
+    return out
+end
+function M.getFactionRank(actor, id)
+    local fac = factionOf(id)
+    local ref = objects.refOf(actor)
+    if not ref then return 0 end
+    if isPlayerRef(ref) then
+        if not fac.playerJoined then return 0 end
+        return (tonumber(fac.playerRank) or 0) + 1
+    end
+    local f, rank = npcFaction(ref)
+    if not f or lowerId(f.id) ~= lowerId(fac.id) then return 0 end
+    return (tonumber(rank) or 0) + 1
+end
+function M.isExpelled(actor, id)
+    local fac = factionOf(id)
+    local ref = objects.refOf(actor)
+    if isPlayerRef(ref) then return fac.playerExpelled == true end
+    return false
+end
+
 function M.extendTypes(types)
     local stats = { dynamic = {}, attributes = {}, ai = {} }
     for k in pairs(DYNAMIC) do stats.dynamic[k] = dynamicStat(k) end
@@ -146,6 +220,13 @@ function M.extendTypes(types)
         if T then
             T.stats = stats
             T.isDead = M.isDead
+        end
+    end
+    for _, T in ipairs({ types.NPC, types.Player }) do
+        if T then
+            T.getFactions = M.getFactions
+            T.getFactionRank = M.getFactionRank
+            T.isExpelled = M.isExpelled
         end
     end
 end

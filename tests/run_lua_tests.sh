@@ -4,8 +4,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 export TESTS_DIR="$ROOT/tests/lua"
 STAGE="$ROOT/staging/LeaveTheLightsOff"
-if [ ! -d "$STAGE" ]; then
-  "$ROOT/scripts/build-staging.sh" 2>/dev/null
+# (re)build the local test staging when it is missing or its runtime differs from runtime/
+if [ ! -d "$STAGE" ] || ! diff -rq "$ROOT/runtime/MWSE/lib" "$STAGE/Data Files/MWSE/lib" >/dev/null 2>&1; then
+  "$ROOT/scripts/build-staging.sh" >/dev/null 2>&1
 fi
 status=0
 for t in "$ROOT"/tests/lua/test_*.lua; do

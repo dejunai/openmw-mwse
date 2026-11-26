@@ -326,6 +326,8 @@ class ModScan:
     hardcode: list[dict] = field(default_factory=list)
     opt_out: dict | None = None
     partial_apis: list[dict] = field(default_factory=list)
+    patterns: list[dict] = field(default_factory=list)      # patterns.Finding.to_json(), file order
+    guards: dict[str, list[str]] = field(default_factory=dict)  # declared script path -> runtime guards
 
     def settings_coverage(self) -> tuple[int, int]:
         r = self.settings.get("renderers", {})
@@ -368,6 +370,7 @@ class ModScan:
             "hardcodeCandidates": self.hardcode,
             "optOut": self.opt_out,
             "partialApis": self.partial_apis,
+            "guards": self.guards,
         }
 
 
@@ -458,38 +461,43 @@ def resolve_local_module(mod: str, by_rel: dict[str, str], from_rel: str | None 
     return None
 
 
-def loaded_lua_paths(scripts: list[ScriptEntry], files: list[FileScan]) -> set[str] | None:
-    """Lua files .omwscripts will load: declared scripts plus local require()s.
+def _script_file(s: ScriptEntry, by_rel: dict, by_name: dict) -> str | None:
+    """The Lua file a declared script entry loads (package-relative path), or None."""
+    candidates = []
+    if s.source:
+        parent = str(Path(s.source).parent).replace("\\", "/")
+        if parent not in (".", ""):
+            candidates.append(parent + "/" + s.path)
+    candidates.append(s.path)
+    for c in candidates:
+        hit = by_rel.get(_norm_rel(c))
+        if hit:
+            return hit
+    cands = by_name.get(Path(s.path).name.lower(), [])
+    return cands[0] if len(cands) == 1 else None
 
-    Returns None when there is no .omwscripts, so every Lua file is counted.
-    """
-    if not scripts:
-        return None
+
+def _file_indexes(files: list[FileScan]):
     by_rel = {_norm_rel(f.path): f.path for f in files}
     by_name: dict[str, list[str]] = {}
     for f in files:
         by_name.setdefault(Path(f.path).name.lower(), []).append(f.path)
+    return by_rel, by_name
+
+
+def script_closures(scripts: list[ScriptEntry], files: list[FileScan]) -> dict[str, set[str]]:
+    """Declared script path -> the Lua files it loads (itself plus local require()s, transitively)."""
+    by_rel, by_name = _file_indexes(files)
     file_by = {f.path: f for f in files}
-    loaded: set[str] = set()
-    queue: list[str] = []
+    out: dict[str, set[str]] = {}
     for s in scripts:
-        candidates = []
-        if s.source:
-            parent = str(Path(s.source).parent).replace("\\", "/")
-            if parent not in (".", ""):
-                candidates.append(parent + "/" + s.path)
-        candidates.append(s.path)
-        hit = None
-        for c in candidates:
-            hit = by_rel.get(_norm_rel(c))
-            if hit:
-                break
-        if hit is None:
-            cands = by_name.get(Path(s.path).name.lower(), [])
-            if len(cands) == 1:
-                hit = cands[0]
-        if hit is not None:
-            queue.append(hit)
+        hit = _script_file(s, by_rel, by_name)
+        out[s.path] = _closure([hit] if hit else [], file_by, by_rel)
+    return out
+
+
+def _closure(queue: list[str], file_by: dict, by_rel: dict) -> set[str]:
+    loaded: set[str] = set()
     while queue:
         rel = queue.pop()
         if rel in loaded:
@@ -509,6 +517,23 @@ def loaded_lua_paths(scripts: list[ScriptEntry], files: list[FileScan]) -> set[s
             if hit is not None and hit not in loaded:
                 queue.append(hit)
     return loaded
+
+
+def loaded_lua_paths(scripts: list[ScriptEntry], files: list[FileScan]) -> set[str] | None:
+    """Lua files .omwscripts will load: declared scripts plus local require()s.
+
+    Returns None when there is no .omwscripts, so every Lua file is counted.
+    """
+    if not scripts:
+        return None
+    by_rel, by_name = _file_indexes(files)
+    file_by = {f.path: f for f in files}
+    queue: list[str] = []
+    for s in scripts:
+        hit = _script_file(s, by_rel, by_name)
+        if hit is not None:
+            queue.append(hit)
+    return _closure(queue, file_by, by_rel)
 
 
 # Which scripts a file runs in. OpenMW gives GLOBAL scripts openmw.world and local
@@ -692,8 +717,65 @@ def scan_mod(root: Path, manifest: dict | None = None, name: str | None = None) 
         blockers.insert(0, f"{opt['code']}: {opt['message']}")
     # An author opt-out never reports where anything is in the mod's files (no file/line).
     partial = [] if opt else partial_api_uses(counted, symbols, handlers, methods, flags, renderers, manifest)
+    found, guards = ([], {}) if opt else pattern_findings(root, scripts, files, counted)
+    partial.extend(pattern_partials(found))
     return ModScan(name or root.name, str(root), scripts, files, symbols, handlers, events, methods, flags,
-                   unsup_mods, meshes, blockers, warnings, settings_info, hard, opt, partial)
+                   unsup_mods, meshes, blockers, warnings, settings_info, hard, opt, partial, found, guards)
+
+
+def pattern_findings(root: Path, scripts: list, files: list, counted: list) -> tuple[list[dict], dict[str, list[str]]]:
+    """Rule-based pattern findings (see patterns.py) in the Lua files the mod loads, and the
+    runtime guards each declared script gets: every rule found in a file the script loads
+    (itself or a module it requires). Guards are emitted into the generated main.lua."""
+    from .patterns import GUARD_FOR_RULE, detect  # local import: patterns imports luatok only
+    found: list[dict] = []
+    by_file: dict[str, set[str]] = {}
+    for f in counted:
+        if f.error:
+            continue
+        for x in detect(read_text(root / f.path)):
+            x.file = f.path
+            found.append(x.to_json())
+            by_file.setdefault(f.path, set()).add(GUARD_FOR_RULE[x.rule])
+    guards: dict[str, list[str]] = {}
+    if by_file:
+        for path, loaded in script_closures(scripts, files).items():
+            g = set()
+            for rel in loaded:
+                g |= by_file.get(rel, set())
+            if g:
+                guards[path] = sorted(g)
+    return found, guards
+
+
+# What each rule's runtime guard does and does not cover (partialApis `missing` for kind "pattern").
+PATTERN_NOTES = {
+    "active-collect-dedupe": "an object from onObjectActive/onActorActive/onItemActive is added to a list with no "
+                             "duplicate check, so the list grows each time the cell is loaded again; omwcompat "
+                             "(guard activeDedupe) skips a table.insert of an object already in the list while the "
+                             "handler runs; list[#list + 1] = obj is not intercepted",
+    "mutate-during-iteration": "a table is changed while it is traversed with next/pairs/ipairs; omwcompat (guard "
+                               "safeIteration) visits the element that table.remove shifts into the freed slot and "
+                               "restarts next() instead of raising 'invalid key to next'; t[k] = nil inside ipairs "
+                               "and inserts inside a pairs loop are reported only",
+}
+
+
+def pattern_partials(found: list[dict]) -> list[dict]:
+    """partialApis entries (kind "pattern") for rules that fired, one per rule."""
+    out = []
+    for rule in ("active-collect-dedupe", "mutate-during-iteration"):
+        hits = [x for x in found if x["rule"] == rule]
+        if not hits:
+            continue
+        uses, seen = [], set()
+        for x in hits:
+            if (x["file"], x["line"]) not in seen:
+                seen.add((x["file"], x["line"]))
+                uses.append({"file": x["file"], "line": x["line"]})
+        out.append({"api": "pattern:" + rule, "kind": "pattern", "count": len(hits),
+                    "uses": uses[:MAX_PARTIAL_USES], "missing": PATTERN_NOTES[rule]})
+    return out
 
 
 MAX_PARTIAL_USES = 20   # per API: the first uses (file order, then line order); `count` has the total
@@ -731,6 +813,7 @@ PARTIAL_NOTES = {
     "openmw.storage.allPlayerSections": "returns this mod's own storage only",
     "openmw.types.*.record": "built from the MWSE object; only commonly used record fields are mapped",
     "openmw.types.*.records": "list built on demand from MWSE objects; only commonly used record fields are mapped",
+    "openmw.types.*.isExpelled": "the player's faction.playerExpelled flag; other NPCs are never expelled (false)",
     "openmw.types.*.inventory": "wraps the reference's MWSE inventory; a subset of the OpenMW Inventory API",
     "openmw.types.Container.content": "wraps the reference's MWSE inventory; a subset of the OpenMW Inventory API",
     "openmw.types.*.stats.dynamic": "maps to the MWSE mobile's health/magicka/fatigue statistic; "
@@ -788,7 +871,8 @@ def partial_api_uses(counted: list, symbols: dict, handlers: dict, methods: dict
                      renderers: dict, manifest: dict) -> list[dict]:
     """Every API the mod uses whose omwcompat status is `partial`, for `partialApis` in the JSON.
 
-    Each entry: {"api", "kind" (symbol|method|engineHandler|scriptFlag|settingsRenderer),
+    Each entry: {"api", "kind" (symbol|method|engineHandler|scriptFlag|settingsRenderer; pattern
+    entries are added by pattern_partials),
     "count", "uses": [{"file", "line"}], "missing"}. `uses` lists at most MAX_PARTIAL_USES
     distinct (file, line) pairs; `file` is a package-relative path with forward slashes. Kinds whose
     position the scanner does not track (handlers, flags, renderers) have `uses: []`.
@@ -860,6 +944,13 @@ def render_markdown(scans: list[ModScan], title: str = "omw2mwse scan") -> str:
                 out.append(f"  - `{pa['api']}` x{pa['count']}" + (f" ({at})" if at else "") + f": {pa['missing']}")
             if len(s.partial_apis) > 40:
                 out.append(f"  - ... and {len(s.partial_apis) - 40} more")
+        if s.patterns:
+            out.append(f"- Rule-based workarounds ({len(s.patterns)} finding(s); the mod's Lua is not edited):")
+            for x in s.patterns[:40]:
+                how = "worked around by omwcompat" if x["guarded"] else "reported only, not worked around"
+                out.append(f"  - `{x['rule']}` at {x['file']}:{x['line']} (`{x['table']}`): {x['detail']}; {how}")
+            for path, g in sorted(s.guards.items()):
+                out.append(f"  - guards for `{path}`: " + ", ".join(g))
         if s.methods:
             out.append("- GameObject methods: " + ", ".join(f"{m} x{e['count']} ({e['status']})" for m, e in sorted(s.methods.items())))
         if s.blockers:

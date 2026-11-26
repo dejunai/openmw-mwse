@@ -219,7 +219,7 @@ the manifest. **Before the first of them** it writes
 `MWSE/mods/mwsuite/openmw/<Mod>/.omw2mwse-recovery/journal.json`:
 
 ```json
-{"tool": "omw2mwse", "format": 1, "version": "0.2.3", "mod": "Demo", "mode": "normal",
+{"tool": "omw2mwse", "format": 1, "version": "0.2.4", "mod": "Demo", "mode": "normal",
  "source": "Off/OpenMW/Demo", "stage": "planned", "resumedFrom": null,
  "writes":  {"MWSE/mods/mwsuite/openmw/Demo/main.lua": {"old": null, "new": "<sha256>"}},
  "removes": {"MWSE/mods/mwsuite/openmw/Demo/omw/_original/scripts/Demo/g.lua": "<sha256>"},
@@ -295,23 +295,64 @@ status is `partial`, so testers know what to try first in game. Additive; nothin
 - `api`: the dotted OpenMW name; GameObject methods are `GameObject:<name>`, script flags
   `scriptFlag:<FLAG>`, engine handlers `engineHandler:<name>`, settings renderers
   `settingsRenderer:<name>`.
-- `kind`: `symbol`, `method`, `scriptFlag`, `engineHandler` or `settingsRenderer`.
+- `kind`: `symbol`, `method`, `scriptFlag`, `engineHandler`, `settingsRenderer` or `pattern`
+  (0.2.4, see below).
 - `count`: total uses in the scripts that load (same counting as `coverage`).
 - `uses`: up to 20 distinct `{file, line}` (file relative to the package folder, forward
   slashes); `[]` for kinds whose position is not tracked (flags, handlers, renderers).
 - `missing`: a short, rule-based note on what omwcompat does differently.
-- Sorted by kind (symbols, methods, handlers, flags, renderers), then by `api`. Present (possibly
+- Sorted by kind (symbols, methods, handlers, flags, renderers, patterns), then by `api`. Present (possibly
   `[]`) on every `status: ok` entry, blocked mods included.
 - **Author opt-out:** always `"partialApis": []`; no file, line or text is ever reported for an
   opted-out mod.
 
 The same list is in `OMW2MWSE-REPORT.md` and the `scan` markdown ("Partially supported APIs").
 
+## Rule-based workarounds (`pattern` entries and `guards`, 0.2.4 / omwcompat 0.3.2)
+
+omw2mwse looks for two Lua patterns that misbehave over time and that omwcompat can work
+around at run time without editing the mod's Lua (detection: `tools/omw2mwse/patterns.py`;
+runtime: `omwcompat/guards.lua`). When a rule fires, two additive things appear; nothing else
+in the contract changed:
+
+1. One `partialApis` entry per rule, with the same five keys as every other entry:
+
+```json
+{"api": "pattern:active-collect-dedupe", "kind": "pattern", "count": 1,
+ "uses": [{"file": "scripts/NFiBW/global.lua", "line": 101}],
+ "missing": "an object from onObjectActive/onActorActive/onItemActive is added to a list with no duplicate check, ...; omwcompat (guard activeDedupe) skips ..."},
+{"api": "pattern:mutate-during-iteration", "kind": "pattern", "count": 2,
+ "uses": [{"file": "scripts/NFiBW/global.lua", "line": 49}, {"file": "scripts/NFiBW/global.lua", "line": 101}],
+ "missing": "a table is changed while it is traversed with next/pairs/ipairs; omwcompat (guard safeIteration) ..."}
+```
+
+2. `mods[].guards` (also in `scan --json`): declared script path -> the runtime guards that
+   script runs with (a script gets the guards of every file it loads, itself and its local
+   `require()`s). `{}` when no rule fired, and always `{}` for an author opt-out.
+
+```json
+"guards": {"scripts/NFiBW/global.lua": ["activeDedupe", "safeIteration"]}
+```
+
+The generated `main.lua` passes them to the runtime
+(`{ flags = { "GLOBAL" }, path = "scripts/NFiBW/global.lua", guards = { "activeDedupe", "safeIteration" } }`)
+and `OMW2MWSE-REPORT.md` lists every finding with file, line, table name and whether the guard
+covers it ("Rule-based workarounds" and "Notes"). A finding never changes the verdict. Tidy
+needs no change; it may show the `pattern` entries like any other partial API.
+
+| Rule (`api`) | Catches | Guard | Covered at run time | Reported only |
+|---|---|---|---|---|
+| `pattern:active-collect-dedupe` | the object argument of `onObjectActive` / `onActorActive` / `onItemActive` appended to a list kept outside the handler (`table.insert(list, obj)` or `list[#list + 1] = obj`) with no other use of that list and no `x[obj]` / `x[obj.id]` check in the handler | `activeDedupe` | `table.insert` of a GameObject that is already in the list, while that script's active handler runs (also inside functions it calls) | `list[#list + 1] = obj`; inserts done by helper functions in *other* handlers |
+| `pattern:mutate-during-iteration` | `table.remove` / `table.insert` on `t` inside `for ... in pairs(t)` / `ipairs(t)` / `next, t`; `t[...] = nil` inside `ipairs(t)`; a `k, v = next(t, k)` cursor kept between calls on a table the same file changes | `safeIteration` | `table.remove` of the element just visited (the element shifted into the freed slot is visited, not skipped); `next()` with a key that no longer exists restarts the traversal instead of raising | `t[i] = nil` inside `ipairs` (ends the loop early, as in OpenMW); `table.insert` inside a `pairs` loop |
+
+Detection is per file and token based: it does not follow calls into helper functions, and
+table names are plain or dotted names (`list`, `S.list`), not expressions.
+
 ## JSON result (abridged)
 
 ```json
 {
- "tool": "omw2mwse", "version": "0.2.3", "command": "convert", "mode": "normal",
+ "tool": "omw2mwse", "version": "0.2.4", "command": "convert", "mode": "normal",
  "dir": "...", "dryRun": false, "changed": true, "exitCode": 0, "alerts": [], "pendingRecovery": [],
  "mods": [{
    "name": "LeaveTheLightsOff", "source": "Off/LeaveTheLightsOff/OpenMW",
@@ -326,6 +367,7 @@ The same list is in `OMW2MWSE-REPORT.md` and the `scan` markdown ("Partially sup
    "partialApis": [{"api": "openmw.vfs.open", "kind": "symbol", "count": 1,
                     "uses": [{"file": "scripts/LeaveTheLightsOff/LTLO_g.lua", "line": 201}],
                     "missing": "loose files only (BSA contents cannot be read); ..."}],
+   "guards": {},
    "plugins": [
      {"name": "No Fires in Bad Weather.esp", "source": "No Fires in Bad Weather.omwaddon",
       "sourceRel": "No Fires in Bad Weather.omwaddon", "kind": "esp",

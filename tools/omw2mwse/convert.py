@@ -346,7 +346,7 @@ def convert(staged: Path, mode: str = "normal", *, name: str | None = None, sour
             entry = {"name": modname, "source": portable_path(src, staged),
                      "status": "ok", "verdict": "blocked", "reason": opt,
                      "alerts": [dict(opt, level="error")], "files": {}, "plugins": [], "conflicts": [], "rewrites": [],
-                     "hardcodeLog": [], "partialApis": [], "changed": False}
+                     "hardcodeLog": [], "partialApis": [], "guards": {}, "changed": False}
             if (staged / mod_dir(modname) / MANIFEST_NAME).is_file():
                 entry["alerts"].append({"level": "warning", "code": "previous-output-present",
                                         "message": f"{mod_dir(modname)} holds output from an earlier conversion; "
@@ -427,6 +427,7 @@ def convert(staged: Path, mode: str = "normal", *, name: str | None = None, sour
             "notice": notice_text(res.credits),
             "plugins": res.plugins,
             "partialApis": res.scan.partial_apis,
+            "guards": res.scan.guards,
         })
         owner_rel = f"Off/{offname}"
         too_long = max_path_offenders(w, staged, src, original_off_prefix(offname))
