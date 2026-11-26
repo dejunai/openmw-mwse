@@ -1,0 +1,98 @@
+# omw2mwse sidecar for Leave The Lights Off (OwnlyMe).
+# Each entry exposes one value the author hard-coded as an MCM setting. The
+# default is always the author's value; this file only adds labels and ranges.
+# Used by: omw2mwse package/convert --mode hardcode (developer warning applies).
+
+[mcm]
+page = "Leave The Lights Off"
+group = "Tunables (hard-coded in the original)"
+description = "Leave The Lights Off by OwnlyMe, hosted on MWSE by omwcompat. These values were hard-coded by the author and exposed by omw2mwse; the defaults are the author's."
+
+[[literal]]
+key = "NIGHT_END_HOUR"
+file = "scripts/LeaveTheLightsOff/LTLO_g.lua"
+line = 393
+context = "clockHour < 7"
+label = "Night ends at (hour)"
+description = "Lights are lit while the game hour is below this value."
+min = 0
+max = 24
+integer = true
+
+[[literal]]
+key = "NIGHT_START_HOUR"
+file = "scripts/LeaveTheLightsOff/LTLO_g.lua"
+line = 393
+context = "clockHour > 18"
+label = "Night starts after (hour)"
+description = "Lights are lit while the game hour is above this value."
+min = 0
+max = 24
+integer = true
+
+[[literal]]
+key = "WEATHER_CHECK_FRAMES"
+file = "scripts/LeaveTheLightsOff/LTLO_g.lua"
+line = 371
+context = "weatherUpdater >= 30"
+label = "Weather check interval (frames)"
+description = "How many frames pass between weather checks. Lower reacts faster to storms; higher costs less."
+min = 1
+max = 300
+integer = true
+
+[[constant]]
+name = "ANIM_STALE_THRESHOLD"
+label = "Animated light stale threshold (seconds)"
+description = "How long an animated light may go without an update before it counts as stale."
+min = 0.1
+max = 5.0
+
+[[literal]]
+key = "DARK_RAIN"
+file = "scripts/LeaveTheLightsOff/LTLO_g.lua"
+line = 357
+context = "Rain = false"
+label = "Light up during rain"
+
+[[literal]]
+key = "DARK_THUNDERSTORM"
+file = "scripts/LeaveTheLightsOff/LTLO_g.lua"
+line = 358
+context = "Thunderstorm = false"
+label = "Light up during thunderstorms"
+
+[[literal]]
+key = "DARK_FOGGY"
+file = "scripts/LeaveTheLightsOff/LTLO_g.lua"
+line = 355
+context = "Foggy = false"
+label = "Light up in fog"
+
+[[literal]]
+key = "DARK_OVERCAST"
+file = "scripts/LeaveTheLightsOff/LTLO_g.lua"
+line = 356
+context = "Overcast = false"
+label = "Light up when overcast"
+
+[[literal]]
+key = "DARK_ASHSTORM"
+file = "scripts/LeaveTheLightsOff/LTLO_g.lua"
+line = 359
+context = "Ashstorm = true"
+label = "Light up during ash storms"
+
+[[literal]]
+key = "DARK_BLIGHT"
+file = "scripts/LeaveTheLightsOff/LTLO_g.lua"
+line = 360
+context = "Blight = true"
+label = "Light up during blight storms"
+
+[[literal]]
+key = "DARK_BLIZZARD"
+file = "scripts/LeaveTheLightsOff/LTLO_g.lua"
+line = 361
+context = "Blizzard = true"
+label = "Light up during blizzards"

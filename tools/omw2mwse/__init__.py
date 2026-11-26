@@ -2,4 +2,4 @@
 
 MIT, Copyright (c) 2026 dej (dejunai). Built with Grok Bot.
 """
-__version__ = "0.1.0"
+__version__ = "0.2.0"
