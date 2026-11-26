@@ -86,16 +86,9 @@ All converted mods share one Mod Config Menu entry, **MW Conversions**:
 
 ## For mod authors: opting out
 
-If you don't want your mod converted, add this line to the header of any Lua script in your
-mod, before the first line of code:
-
-```lua
--- mwsuite conversion opt-out
-```
-
-It also works inside a `--[[ ]]` header comment, and case and spacing don't matter. The
-converter then refuses to convert the mod and leaves it untouched. The phrase only counts
-in the header; after the first line of code it is ignored.
+If you don't want your mod converted, you can opt out: the converter honors an opt-out
+marker in a header comment of your mod's Lua scripts and then leaves the mod untouched.
+Contact dej (dejunai) via the Nexus Mods forums for the exact wording.
 
 ## Known limits
 

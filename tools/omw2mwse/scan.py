@@ -652,7 +652,7 @@ def scan_mod(root: Path, manifest: dict | None = None, name: str | None = None) 
     from .optout import find_opt_out  # local import: optout is standalone
     opt = find_opt_out(root)
     if opt:
-        blockers.insert(0, f"{opt['code']}: {opt['file']}:{opt['line']}: the mod author opted out of mwsuite conversion")
+        blockers.insert(0, f"{opt['code']}: {opt['message']}")
     return ModScan(name or root.name, str(root), scripts, files, symbols, handlers, events, methods, flags,
                    unsup_mods, meshes, blockers, warnings, settings_info, hard, opt)
 

@@ -247,12 +247,36 @@ class LocalScriptScanTests(unittest.TestCase):
 
 
 from omw2mwse.convert import convert as convert_staged  # noqa: E402
-from omw2mwse.optout import REASON_CODE, header_opt_out_line  # noqa: E402
+from omw2mwse.optout import REASON_CODE, REASON_MESSAGE, header_opt_out_line  # noqa: E402
+from omw2mwse.scan import render_markdown  # noqa: E402
 
 GLOBAL_SRC = "local world = require('openmw.world')\nreturn {}\n"
 
 
 class OptOutTests(unittest.TestCase):
+    def _assert_hidden(self, out):
+        """User-facing output never says where the marker is, or what it says."""
+        import json
+        text = out if isinstance(out, str) else json.dumps(out)
+        for leak in ("notes.lua", '"line"', '"file"', "mwsuite conversion opt", ":1"):
+            self.assertNotIn(leak, text.lower(), leak)
+
+    def test_cli_output_hides_marker(self):
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t)
+            _make_mod(root, script_src=GLOBAL_SRC)
+            (root / "scripts" / "M" / "notes.lua").write_text("-- mwsuite conversion opt-out\n", encoding="utf-8")
+            for argv in (["convert", t], ["convert", t, "--json"], ["scan", t], ["scan", t, "--json"]):
+                buf = io.StringIO()
+                with redirect_stdout(buf):
+                    main(argv)
+                out = buf.getvalue()
+                if argv[0] == "scan":   # scan still lists the package's files in general; check the opt-out parts
+                    out = "\n".join(ln for ln in out.splitlines() if REASON_CODE in ln or "optOut" in ln
+                                     or "excluded" in ln)
+                self._assert_hidden(out)
+                self.assertIn(REASON_MESSAGE, buf.getvalue().replace("\\'", "'"), argv)
+
     def test_header_line_comment(self):
         self.assertEqual(header_opt_out_line("-- My mod\n-- mwsuite conversion opt-out\nlocal x = 1\n"), 2)
 
@@ -282,10 +306,11 @@ class OptOutTests(unittest.TestCase):
             _make_mod(Path(t), script_src="-- mwsuite conversion opt-out\n" + GLOBAL_SRC)
             s = scan_mod(Path(t), MANIFEST)
             self.assertEqual(s.verdict, "blocked")
-            self.assertEqual(s.opt_out["code"], REASON_CODE)
-            self.assertEqual((s.opt_out["file"], s.opt_out["line"]), ("scripts/M/m.lua", 1))
-            self.assertTrue(s.blockers[0].startswith(REASON_CODE + ": scripts/M/m.lua:1"))
-            self.assertEqual(s.to_dict()["optOut"]["code"], REASON_CODE)
+            self.assertEqual(s.opt_out, {"code": REASON_CODE, "message": REASON_MESSAGE})
+            self.assertEqual(s.blockers[0], f"{REASON_CODE}: {REASON_MESSAGE}")
+            self.assertEqual(s.to_dict()["optOut"], {"code": REASON_CODE, "message": REASON_MESSAGE})
+            self._assert_hidden({"optOut": s.to_dict()["optOut"], "blockers": s.blockers})
+            self._assert_hidden([ln for ln in render_markdown([s]).splitlines() if REASON_CODE in ln])
 
     def test_undeclared_lua_opts_out_and_convert_writes_nothing(self):
         with tempfile.TemporaryDirectory() as t:
@@ -298,9 +323,9 @@ class OptOutTests(unittest.TestCase):
             self.assertEqual(before, after)
             m = r["mods"][0]
             self.assertEqual(m["verdict"], "blocked")
-            self.assertEqual(m["reason"], {"code": REASON_CODE, "file": "scripts/M/notes.lua", "line": 1,
-                                           "message": m["reason"]["message"]})
-            self.assertEqual(m["alerts"][0]["code"], REASON_CODE)
+            self.assertEqual(m["reason"], {"code": REASON_CODE, "message": REASON_MESSAGE})
+            self.assertEqual(m["alerts"][0], {"level": "error", "code": REASON_CODE, "message": REASON_MESSAGE})
+            self._assert_hidden(r)
             self.assertFalse(r["changed"])
             self.assertEqual(r["exitCode"], 0)
 
@@ -308,8 +333,9 @@ class OptOutTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             src = Path(t) / "src"
             _make_mod(src, script_src="-- mwsuite conversion opt-out\n" + GLOBAL_SRC)
-            with self.assertRaises(PackageError):
+            with self.assertRaises(PackageError) as cm:
                 package(src, Path(t) / "out", name="M")
+            self.assertEqual(str(cm.exception), REASON_MESSAGE)
             self.assertFalse((Path(t) / "out").exists())
 
     def test_no_phrase_still_converts(self):

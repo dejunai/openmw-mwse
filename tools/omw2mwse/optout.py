@@ -15,6 +15,10 @@ import re
 from pathlib import Path
 
 REASON_CODE = "author-opt-out"
+# What every user-facing output says (CLI, --json reason and alerts, scan, package errors).
+# Deliberately no file, line or matched text: where the marker sits is not shown.
+REASON_MESSAGE = ("The original mod author has asked that this mod be excluded from mwsuite's conversion "
+                  "utility; contact the original mod author for details.")
 PHRASE = "mwsuite conversion opt-out"
 PHRASE_RE = re.compile(r"mwsuite\s+conversion\s+opt\s*-?\s*out", re.IGNORECASE)
 _LONG_OPEN = re.compile(r"--\[(=*)\[")
@@ -62,8 +66,15 @@ def header_opt_out_line(text: str) -> int | None:
     return None
 
 
+def opt_out_reason() -> dict:
+    """The reason object for an opted-out mod: {code, message}, nothing else."""
+    return {"code": REASON_CODE, "message": REASON_MESSAGE}
+
+
 def find_opt_out(root: Path) -> dict | None:
-    """First opted-out .lua file under root (sorted walk), as a reason dict, or None."""
+    """opt_out_reason() if any .lua file under root opts out in its header, else None.
+
+    The file and line are intentionally not returned (see REASON_MESSAGE)."""
     root = Path(root)
     for dp, dns, fns in os.walk(root):
         dns[:] = sorted(d for d in dns if d not in SKIP_DIRS)
@@ -75,9 +86,6 @@ def find_opt_out(root: Path) -> dict | None:
                 text = p.read_bytes().decode("utf-8", errors="replace")
             except OSError:
                 continue
-            ln = header_opt_out_line(text)
-            if ln is not None:
-                rel = p.relative_to(root).as_posix()
-                return {"code": REASON_CODE, "file": rel, "line": ln,
-                        "message": f"the mod author opted out of mwsuite conversion ({rel}:{ln}); not converted"}
+            if header_opt_out_line(text) is not None:
+                return opt_out_reason()
     return None
