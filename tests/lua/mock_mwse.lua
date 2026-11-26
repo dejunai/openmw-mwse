@@ -32,8 +32,52 @@ function M.install(opts)
         end,
         loadConfig = function(name, defaults) return deepcopy(W.config and W.config[name] or defaults) end,
         saveConfig = function(name, t) W.config = W.config or {}; W.config[name] = deepcopy(t) end,
-        mcm = { register = function() end },
+        mcm = {},
     }
+    -- recording MCM: templates -> pages -> categories -> components (with their variables)
+    W.mcm = {}
+    local function container(kind, t)
+        local c = { kind = kind, label = t and t.label, description = t and t.description, children = {}, args = t }
+        local function add(k)
+            return function(self, args)
+                local child = container(k, args)
+                child.variable = args and args.variable
+                child.text = args and args.text
+                child.options = args and args.options
+                self.children[#self.children + 1] = child
+                return child
+            end
+        end
+        for _, k in ipairs({ "createSideBarPage", "createPage", "createCategory", "createOnOffButton", "createYesNoButton",
+            "createSlider", "createTextField", "createDropdown", "createInfo", "createButton" }) do
+            c[k] = add(k:sub(7))
+        end
+        return c
+    end
+    mwse.mcm.createTemplate = function(t)
+        local tpl = container("Template", type(t) == "table" and t or { name = t })
+        tpl.name = tpl.args.name
+        function tpl:register() W.mcm[#W.mcm + 1] = self end
+        return tpl
+    end
+    mwse.mcm.register = function(tpl) tpl:register() end
+    mwse.mcm.createCustom = function(t) return { getter = t.getter, setter = t.setter, numbersOnly = t.numbersOnly } end
+    -- walk all value components of a template
+    function M.mcmControls(tpl)
+        local out = {}
+        local function walk(c)
+            if c.variable then out[#out + 1] = c end
+            for _, ch in ipairs(c.children) do walk(ch) end
+        end
+        walk(tpl)
+        return out
+    end
+    function M.mcmFind(tpl, label)
+        for _, c in ipairs(M.mcmControls(tpl)) do if c.label == label then return c end end
+    end
+    function M.mcmGet(c) return c.variable.getter(c.variable) end
+    function M.mcmSet(c, v) c.variable.setter(c.variable, v) end
+    function M.mcmClose(tpl) if tpl.onClose then tpl.onClose(tpl) end end
     _G.json = { encode = function() return "{}" end, decode = function() return {} end }
 
     ------------------------------------------------------------ objects
