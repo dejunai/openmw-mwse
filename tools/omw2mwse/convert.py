@@ -99,7 +99,33 @@ def _prune_empty_dirs(start: Path, stop: Path) -> None:
             break
 
 
-def relocate_original(src: Path, staged: Path, name: str, keep_root=None) -> list[str]:
+def owned_by_others(staged: Path, src: Path, mod_dir_name: str) -> set:
+    """Lower-case posix paths, relative to src, of files other converted mods in this staged
+    folder placed (keys of their manifests' files and plugin paths). Those are never part of
+    this mod's original package, e.g. a nested add-on's <Name>-metadata.toml at the root."""
+    try:
+        src_rel = src.resolve().relative_to(staged.resolve()).as_posix()
+    except ValueError:
+        return set()
+    pre = "" if src_rel in ("", ".") else src_rel.lower() + "/"
+    out = set()
+    for pattern in ("MWSE/mods/mwsuite/openmw/*/" + MANIFEST_NAME, "MWSE/omw/*/" + MANIFEST_NAME):
+        for mp in sorted(staged.glob(pattern)):
+            if mp.parent.name == mod_dir_name:
+                continue
+            try:
+                data = json.loads(mp.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            rels = list(data.get("files", {})) + [p.get("path") for p in data.get("plugins", []) if p.get("path")]
+            for r in rels:
+                r = r.replace("\\", "/").lower()
+                if r.startswith(pre):
+                    out.add(r[len(pre):])
+    return out
+
+
+def relocate_original(src: Path, staged: Path, name: str, keep_root=None, exclude=None) -> list[str]:
     """After Off/<name>/OpenMW/ has been written, remove the previous package location.
 
     Game assets already at the staged Data Files root (meshes/, textures/, ...) stay
@@ -120,7 +146,7 @@ def relocate_original(src: Path, staged: Path, name: str, keep_root=None) -> lis
     removed: list[str] = []
     src_is_root = src_r == staged_r
     keep = {k.replace("\\", "/").lower() for k in (keep_root or [])}
-    for p, rel in iter_original_files(src):
+    for p, rel in iter_original_files(src, exclude):
         posix = rel.replace("\\", "/")
         newp = dest / rel
         if not p.is_file() or not newp.is_file():
@@ -270,6 +296,7 @@ def convert(staged: Path, mode: str = "normal", *, name: str | None = None, sour
                 except (OSError, ValueError):
                     result["alerts"].append({"level": "warning", "code": "manifest-unreadable", "message": rel_m})
         w = Writer(staged, previous=prev, adopt=adopt, max_path=MAX_PATH_CHARS)
+        others = owned_by_others(staged, src, Path(mod_dir(modname)).name)
         sc = None
         if mode == "hardcode":
             sp = Path(sidecar_path) if sidecar_path else SC.find(modname, staged, src)
@@ -290,7 +317,7 @@ def convert(staged: Path, mode: str = "normal", *, name: str | None = None, sour
         mesh_dirs = list(meshes_from or []) + [staged / "meshes", src / "meshes"]
         entry = {"name": modname, "source": str(src.relative_to(staged)) if staged in src.parents else str(src)}
         try:
-            res = build(src, w, modname, off_name=offname, slug=None, with_runtime=with_runtime, meshes_from=mesh_dirs, mode=mode,
+            res = build(src, w, modname, off_name=offname, exclude=others, slug=None, with_runtime=with_runtime, meshes_from=mesh_dirs, mode=mode,
                         sidecar=sc, confirm=confirm, manifest=manifest, title=title, credits=credits,
                         meta_dirs=[staged])
         except warn.Refused as e:
@@ -350,7 +377,7 @@ def convert(staged: Path, mode: str = "normal", *, name: str | None = None, sour
                                         "message": f"MWSE/mods/{modname}/main.lua is not an omw2mwse file and would load "
                                                    "alongside the converted mod; remove it if it is an older build or hand port"})
             keep_root = [pl["name"] for pl in res.plugins if pl.get("placement") == "root"]
-            moved = relocate_original(src, staged, offname, keep_root=keep_root)
+            moved = relocate_original(src, staged, offname, keep_root=keep_root, exclude=others)
             if moved:
                 previous_src = entry["source"]
                 entry["source"] = str(canonical_source(staged, offname).relative_to(staged))

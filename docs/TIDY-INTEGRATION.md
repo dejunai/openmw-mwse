@@ -57,6 +57,15 @@ folder below it that holds a `.omwscripts` file, outside `MWSE/` (for example a 
 `Off/OpenMW/LeaveTheLightsOff/` or a loose package at the folder root), and writes the
 MWSE build into the same folder. `package` uses the same layout under `OUT/Data Files/`.
 
+**Package boundaries.** Each folder that directly holds a `.omwscripts` file is one package
+and is converted on its own (its own `mods[]` entry, `Off/<plugin>/OpenMW/`, MWSE folder and
+manifest). A package's files are everything below its folder except: a subfolder that holds
+its own `.omwscripts` (a nested package, such as an add-on shipped in `example-addon/`, with
+everything below it), the package's top-level `MWSE/`, `Off/` and `Extras/` output folders,
+and files another converted mod in the same staged folder placed (listed in its manifest,
+e.g. that mod's `<Name>-metadata.toml`). Above the first package (an archive's wrapper
+folder) nothing is cut off. A nested package's opt-out or verdict does not affect its parent.
+
 The complete original OpenMW package is **always** placed at
 `Off/<plugin>/OpenMW/<the author's relative paths>`. Example:
 

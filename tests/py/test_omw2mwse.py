@@ -511,6 +511,71 @@ class OffLayoutTests(unittest.TestCase):
             self.assertTrue(any(x.startswith("MWSE\\") for x in listed))
 
 
+class NestedPackageTests(unittest.TestCase):
+    """A subfolder with its own .omwscripts is a separate package (e.g. harvest-lights'
+    example-addon/): converted on its own, never swept into the parent."""
+
+    def _make(self, root: Path, addon_src: str = GLOBAL_SRC):
+        _make_mod(root, script_src=GLOBAL_SRC)
+        (root / "l10n" / "M").mkdir(parents=True)
+        (root / "l10n" / "M" / "en.yaml").write_text("k: v\n", encoding="utf-8")
+        a = root / "example-addon"
+        (a / "scripts" / "A").mkdir(parents=True)
+        (a / "scripts" / "A" / "a.lua").write_text(addon_src, encoding="utf-8")
+        (a / "A.omwscripts").write_text("GLOBAL: scripts/A/a.lua\n", encoding="utf-8")
+        (a / "l10n" / "A").mkdir(parents=True)
+        (a / "l10n" / "A" / "en.yaml").write_text("a: b\n", encoding="utf-8")
+
+    def test_scan_excludes_nested_package(self):
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t)
+            self._make(root)
+            s = scan_mod(root, MANIFEST)
+            self.assertEqual([x.path for x in s.scripts], ["scripts/M/m.lua"])
+            self.assertFalse(any("a.lua" in f.path for f in s.files))
+
+    def test_convert_separately_and_idempotent(self):
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t)
+            self._make(root)
+            r1 = convert_staged(root, "normal")
+            self.assertEqual(r1["exitCode"], 0, r1)
+            self.assertEqual(sorted(m["name"] for m in r1["mods"]), ["A", "M"])
+            files1 = _files(root)
+            for f in files1:   # nothing of A (or A's output) inside M's original package or hosted tree
+                if f.startswith("Off/M/") or f.startswith("MWSE/mods/mwsuite/openmw/M/"):
+                    self.assertNotIn("example-addon", f)
+                    self.assertNotIn("scripts/A", f)
+                    self.assertNotIn("A-metadata", f)
+                if f.startswith("Off/M/OpenMW/"):
+                    self.assertFalse(f[len("Off/M/OpenMW/"):].lower().startswith(("mwse/", "off/")), f)
+            self.assertIn("Off/A/OpenMW/scripts/A/a.lua", files1)
+            self.assertIn("Off/A/OpenMW/l10n/A/en.yaml", files1)
+            self.assertIn("A-metadata.toml", files1)
+            self.assertIn("M-metadata.toml", files1)
+            self.assertFalse((root / "example-addon").exists())          # relocated, emptied folder pruned
+            for mod in ("A", "M"):
+                man, man_rel = _load_manifest_of(root, mod)
+                on_disk = set(files1)
+                self.assertEqual(sorted(set(man["files"]) - on_disk), [])
+            r2 = convert_staged(root, "normal")
+            self.assertFalse(r2["changed"], [(m["name"], {k: v for k, v in m["files"].items() if v != "unchanged"})
+                                             for m in r2["mods"]])
+            self.assertEqual(_files(root), files1)
+            r3 = convert_staged(root, "normal")
+            self.assertFalse(r3["changed"])
+
+    def test_nested_opt_out_does_not_block_parent(self):
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t)
+            self._make(root, addon_src="-- mwsuite conversion opt-out\n" + GLOBAL_SRC)
+            r = convert_staged(root, "normal")
+            v = {m["name"]: m["verdict"] for m in r["mods"]}
+            self.assertEqual(v, {"A": "blocked", "M": "ready"})
+            self.assertTrue((root / "example-addon" / "A.omwscripts").is_file())   # untouched
+            self.assertFalse((root / "Off" / "M" / "OpenMW" / "example-addon").exists())
+
+
 class PackageTests(unittest.TestCase):
     def test_slug_and_alias(self):
         self.assertEqual(default_slug("LeaveTheLightsOff"), "ltlo")

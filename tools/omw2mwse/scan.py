@@ -365,26 +365,56 @@ class ModScan:
 
 
 SKIP_DIRS = {".git", "__pycache__"}
+# Top-level folders of a package that hold converter/tidy output, never package content:
+# MWSE/ (generated build), Off/ (set-aside originals of this or other packages), Extras/.
+OUTPUT_TOP_DIRS = frozenset({"mwse", "off", "extras"})
+
+
+def is_package_dir(d) -> bool:
+    """True if folder d directly holds a *.omwscripts file (an OpenMW package root)."""
+    try:
+        return any(e.lower().endswith(".omwscripts") and os.path.isfile(os.path.join(d, e)) for e in os.listdir(d))
+    except OSError:
+        return False
+
+
+def walk_package(root):
+    """os.walk over one package: sorted, without SKIP_DIRS, without the package's top-level
+    output folders (OUTPUT_TOP_DIRS, when root is itself a package), and without nested packages. Inside a package (a folder holding a
+    .omwscripts, or below one), a subfolder that holds its own .omwscripts is a package
+    boundary: it is converted on its own (convert.find_sources lists it), so neither its files
+    nor anything below it belong to the parent. Above the first package (an archive's wrapper
+    folder) nothing is pruned, so `scan mod-archive/` still finds the package inside."""
+    root = os.fspath(root)
+    inside: set = set()
+    for dp, dns, fns in os.walk(root):
+        top = os.path.normpath(dp) == os.path.normpath(root)
+        in_pkg = dp in inside or is_package_dir(dp)
+        keep = []
+        for d in sorted(dns):
+            if d in SKIP_DIRS or d.lower() == "__pycache__" or (top and in_pkg and d.lower() in OUTPUT_TOP_DIRS):
+                continue
+            sub = os.path.join(dp, d)
+            if in_pkg:
+                if is_package_dir(sub):
+                    continue
+                inside.add(sub)
+            keep.append(d)
+        dns[:] = keep
+        yield dp, dns, sorted(fns)
+
+
+def package_files(root) -> list[Path]:
+    """Every file of the package rooted at root (see walk_package), sorted walk order."""
+    return [Path(dp) / fn for dp, _dns, fns in walk_package(root) for fn in fns]
 
 
 def find_lua_files(root: Path) -> list[Path]:
-    out = []
-    for dp, dns, fns in os.walk(root):
-        dns[:] = sorted(d for d in dns if d not in SKIP_DIRS)
-        for fn in sorted(fns):
-            if fn.lower().endswith(".lua"):
-                out.append(Path(dp) / fn)
-    return out
+    return [p for p in package_files(root) if p.name.lower().endswith(".lua")]
 
 
 def find_omwscripts(root: Path) -> list[Path]:
-    out = []
-    for dp, dns, fns in os.walk(root):
-        dns[:] = sorted(d for d in dns if d not in SKIP_DIRS)
-        for fn in sorted(fns):
-            if fn.lower().endswith(".omwscripts"):
-                out.append(Path(dp) / fn)
-    return out
+    return [p for p in package_files(root) if p.name.lower().endswith(".omwscripts")]
 
 
 def read_text(p: Path) -> str:

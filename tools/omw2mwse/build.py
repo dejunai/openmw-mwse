@@ -33,7 +33,8 @@ from . import __version__
 from . import constants as K
 from . import sidecar as SC
 from .plugins import classify_plugins, installed_plugin_rel, is_plugin_path
-from .scan import ModScan, find_lua_files, find_omwscripts, normalize_mesh, read_text, render_markdown, scan_mod
+from .scan import (ModScan, find_lua_files, find_omwscripts, normalize_mesh, package_files, read_text, render_markdown,
+                   scan_mod)
 
 HERE = Path(__file__).resolve().parent
 RUNTIME_LIB = HERE.parent.parent / "runtime" / "MWSE" / "lib"
@@ -160,13 +161,19 @@ def renamed_plugin(rel: str) -> str | None:
     return new if new != rel else None
 
 
-def iter_original_files(src: Path):
-    """Yield (path, posix-rel) for every file that belongs to the original OpenMW package."""
+def iter_original_files(src: Path, exclude=None):
+    """Yield (path, posix-rel) for every file that belongs to the original OpenMW package.
+
+    Nested packages (subfolders with their own .omwscripts) and top-level MWSE/, Off/ and
+    Extras/ are not part of it (scan.walk_package). exclude: lower-case posix paths relative
+    to src that other converted mods placed (their manifests), e.g. a sibling's metadata."""
     src = Path(src)
-    for p in sorted(src.rglob("*")):
+    for p in sorted(package_files(src)):
         if not p.is_file():
             continue
         rel = p.relative_to(src).as_posix()
+        if exclude and rel.lower() in exclude:
+            continue
         parts = p.relative_to(src).parts
         if any(x in OFF_SKIP_DIRS or x.lower() == "__pycache__" for x in parts):
             continue
@@ -676,7 +683,7 @@ def build(src: Path, writer: Writer, name: str, *, data_prefix: str = "", slug: 
           with_runtime: bool = True, meshes_from: list[Path] | None = None, mode: str = "normal",
           sidecar: dict | None = None, confirm=None, manifest: dict | None = None,
           title: str | None = None, credits: dict | None = None, meta_dirs: list | None = None,
-          off_name: str | None = None) -> BuildResult:
+          off_name: str | None = None, exclude=None) -> BuildResult:
     """Plan all outputs for one mod into writer (paths relative to writer.root, under data_prefix).
 
     confirm(plan) -> accepted conversions (raises warn.Refused); required when mode == 'hardcode'.
@@ -698,7 +705,7 @@ def build(src: Path, writer: Writer, name: str, *, data_prefix: str = "", slug: 
     # 0. Complete original OpenMW package at Off/<plugin>/OpenMW/<original paths>.
     # Non-plugin game assets (meshes, Sound, ...) are also installed at the Data
     # Files root. Plugins are classified and placed after the hosted Lua is known.
-    originals = list(iter_original_files(src))
+    originals = list(iter_original_files(src, exclude))
     present = {rel.lower() for _, rel in originals}
     plugin_data = {}
     for p, rel in originals:
@@ -783,7 +790,7 @@ def build(src: Path, writer: Writer, name: str, *, data_prefix: str = "", slug: 
         r = om.relative_to(src).as_posix()
         writer.put(omw + r, om.read_bytes())
         res.copied.append((r, r, False))
-    for p in sorted(src.rglob("*")):
+    for p in sorted(package_files(src)):
         if p.is_file() and "l10n" in [x.lower() for x in p.relative_to(src).parts]:
             r = p.relative_to(src).as_posix()
             writer.put(omw + r, p.read_bytes())

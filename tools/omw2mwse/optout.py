@@ -10,7 +10,6 @@ MIT, Copyright (c) 2026 dej (dejunai).
 """
 from __future__ import annotations
 
-import os
 import re
 from pathlib import Path
 
@@ -22,7 +21,6 @@ REASON_MESSAGE = ("The original mod author has asked that this mod be excluded f
 PHRASE = "mwsuite conversion opt-out"
 PHRASE_RE = re.compile(r"mwsuite\s+conversion\s+opt\s*-?\s*out", re.IGNORECASE)
 _LONG_OPEN = re.compile(r"--\[(=*)\[")
-SKIP_DIRS = {".git", "__pycache__"}
 
 
 def header_opt_out_line(text: str) -> int | None:
@@ -75,10 +73,10 @@ def find_opt_out(root: Path) -> dict | None:
     """opt_out_reason() if any .lua file under root opts out in its header, else None.
 
     The file and line are intentionally not returned (see REASON_MESSAGE)."""
+    from .scan import walk_package  # same package boundaries as the build
     root = Path(root)
-    for dp, dns, fns in os.walk(root):
-        dns[:] = sorted(d for d in dns if d not in SKIP_DIRS)
-        for fn in sorted(fns):
+    for dp, _dns, fns in walk_package(root):
+        for fn in fns:
             if not fn.lower().endswith(".lua"):
                 continue
             p = Path(dp) / fn
