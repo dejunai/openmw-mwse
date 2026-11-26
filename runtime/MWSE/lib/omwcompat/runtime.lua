@@ -426,7 +426,7 @@ function RT.createRecord(m, draft)
     if draft.model then
         local mesh, how = RT.resolveMesh(m, draft.model)
         if mesh then
-            copy.mesh = mesh
+            copy.mesh = mesh:gsub("/", "\\") -- Morrowind-native separators
         else
             RT.warn("createRecord: model '%s' is longer than 31 chars and has no alias (%s); keeping template mesh '%s'",
                 draft.model, how, tostring(template.mesh))

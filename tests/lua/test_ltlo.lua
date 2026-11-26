@@ -63,7 +63,7 @@ check(lc and lc.object.id:find("^Generated:0x") ~= nil, "copy record id is Gener
 check(lc and lc.object.mesh == "light_de_lantern_01_off99.nif", "lantern copy uses off99 mesh (" .. tostring(lc and lc.object.mesh) .. ")")
 check(lc and math.abs(lc.orientation.z - 1.25) < 1e-9, "rotation preserved")
 local sc = copyAt(500)
-check(sc and sc.object.mesh == "omwc/ltlo/72d5ca40.nif", "R4: streetlight copy uses short alias (" .. tostring(sc and sc.object.mesh) .. ")")
+check(sc and sc.object.mesh == "omwc\\ltlo\\72d5ca40.nif", "R4: streetlight copy uses short alias (" .. tostring(sc and sc.object.mesh) .. ")")
 check(sc and sc.scale == 1.5, "scale preserved")
 local pc = copyAt(900)
 check(pc and pc.object.mesh == "l\\light_paper_lantern_01.nif", "R4 fallback: paper lantern keeps template mesh when alias missing")
