@@ -1,74 +1,130 @@
 # openmw-mwse
 
-Run OpenMW-only Lua mods on the original Morrowind engine with MWSE.
+> **EXPERIMENTAL - EARLY DEVELOPMENT.** Expect bugs, missing features and breaking changes.
+> Back up your saves and your mod setup before trying a converted mod.
 
-A personal project by **dej (dejunai)**, built with Grok Bot.
+openmw-mwse converts **OpenMW-only Lua mods** into **MWSE mods** for the original Morrowind
+engine (Morrowind.exe + MWSE). It is a personal project by **dej (dejunai)**.
 
-It has two parts (see [DESIGN.md](DESIGN.md) for the reasoning):
+## What it does
 
-- **omwcompat** (`runtime/MWSE/lib/`) is an MWSE Lua library. It provides the `openmw.*` API
-  (`world`, `types`, `core` + weather, `util`, `async`, `storage`, `vfs`, `interfaces`
-  with Activation, plus `openmw_aux.calendar/util/time`). It hosts the mod's unmodified
-  GLOBAL scripts with OpenMW's engine handlers and save/load semantics.
-- **omw2mwse** (`tools/omw2mwse`, Python 3.13+, stdlib only) is the CLI.
-  - `scan` reports which OpenMW APIs a mod uses and whether omwcompat supports each one.
-  - `package` builds an MWSE mod folder. The complete original OpenMW package is always
-    placed at `Off/<Mod>/OpenMW/<original paths>`. Hosted Lua is copied byte-for-byte
-    (unless hard-code conversion rewrites it). A generated `main.lua` loader is added,
-    and mesh paths over 31 characters get short aliases.
+It has two parts:
 
-The first target is **Leave The Lights Off** by OwnlyMe (Nexus 57510). Its original
-`LTLO_g.lua` runs unmodified on MWSE through omwcompat.
+- **omw2mwse** - the converter. It scans an OpenMW mod, reports which `openmw.*` APIs it
+  uses, and rewrites the mod's folder into an MWSE mod. It is normally run for you by
+  conflict-tools' **tidy** on mods in your Vortex staging folder; it can also be run by hand
+  (see [docs/DEVELOPER.md](docs/DEVELOPER.md)).
+- **omwcompat** - an MWSE Lua runtime that provides the `openmw.*` API, so the mod's
+  original Lua scripts run unmodified inside MWSE.
 
-## Quick start
+## Supported (omwcompat 0.3.0)
 
-```sh
-bin/omw2mwse scan path/to/openmw-mod
-bin/omw2mwse package path/to/openmw-mod --name ModName --out staging/ModName
-tests/run_lua_tests.sh                       # LuaJIT + MWSE mock scenarios
-python3 -m unittest discover -s tests/py     # CLI unit tests
-```
+**Script kinds**
 
-The output of `package` mirrors `Data Files`:
+- `GLOBAL` scripts.
+- Object-attached (local) scripts: `NPC`, `CREATURE`, `ACTOR`, `CONTAINER`, `DOOR`, `LIGHT`,
+  `ACTIVATOR`. One instance runs per object while it is in an active cell; its saved data
+  survives cell changes and save/load.
 
-```
-Data Files/Off/<Mod>/OpenMW/...              complete original OpenMW package (author paths)
-Data Files/MWSE/mods/mwsuite/openmw/<Mod>/main.lua   generated loader (register with omwcompat)
-Data Files/MWSE/mods/mwsuite/openmw/<Mod>/omw/...    hosted .omwscripts + Lua
-Data Files/MWSE/lib/omwcompat.lua, omwcompat/ the runtime (unless --no-runtime)
-Data Files/meshes/, textures/, ...           original game assets (also under Off/)
-Data Files/meshes/omwc/<slug>/<hash>.nif     short aliases for long mesh paths
-Data Files/<Mod>-metadata.toml               MWSE metadata
-MESH-ALIASES.txt                             long mesh path -> short alias
-OMW2MWSE-REPORT.md                           scan + file list with hashes
-```
+**Modules and APIs**
 
-## Status
+- `openmw.core` (time, events, GMSTs, content files, weather), `openmw.world` (global
+  scripts), `openmw.types` (lights, actors, items, containers, doors, records, inventories),
+  `openmw.util`, `openmw.async` (timers), `openmw.storage`, `openmw.vfs` (loose files),
+  `openmw_aux.util`, `openmw_aux.time`, `openmw_aux.calendar`.
+- `openmw.self` and `openmw.nearby` (local scripts).
+- Actor stats: health/magicka/fatigue, attributes, AI fight/flee/alarm/hello, `isDead`.
+- Interfaces: `I.Activation`, `I.Settings` (shown as an MCM), and `I.AI` in actor scripts
+  (combat, wander, travel, follow, escort).
+- `world.mwscript.getGlobalScript` (read/write vanilla global script variables).
+- Engine handlers: `onInit`, `onLoad`, `onSave`, `onUpdate`, `onNewGame`, `onPlayerAdded`,
+  `onObjectActive`, `onActorActive`, `onItemActive`, `onActivate`, and for local scripts
+  `onActive`, `onInactive`, `onActivated`.
 
-The project is an MVP. GLOBAL scripts and object-attached scripts (NPC, CREATURE, ACTOR,
-CONTAINER, DOOR, LIGHT, ACTIVATOR) are hosted. Player, custom, menu and UI scripts are reported
-by `scan` as blockers. Docs:
-- [docs/RUNTIME.md](docs/RUNTIME.md) covers how the emulation works and the four object-lifecycle rules.
-- [docs/COVERAGE.md](docs/COVERAGE.md) covers the test corpus.
-- [docs/GAPS.md](docs/GAPS.md) lists the known differences.
-- [docs/INSTALL-PLAN.md](docs/INSTALL-PLAN.md) has the LTLO install steps.
+Many of these are partial. Exact differences are listed in [docs/GAPS.md](docs/GAPS.md).
 
-The `reference/`, `corpus/` and `staging/` folders are local only and git-ignored. Third-party mods
-are personal test material and are not redistributed here.
+## What a converted mod looks like
 
-## 0.2: settings, MCMs, hard-coded values, tidy entry point
+Inside the mod's folder (a `Data Files` root):
 
-- OpenMW settings (`I.Settings`, `openmw.storage`) become an MWSE MCM named
-  one shared "MW Conversions" entry (tab 1 disclaimer, one tab per converted mod). See docs/RUNTIME.md.
-- `omw2mwse convert <staged-mod-dir> --mode normal|hardcode --json` (or
-  `--convert-omwscripts[=MODE]`) converts in place and is idempotent. See
-  docs/TIDY-INTEGRATION.md.
-- Hard-coded values are exposed through a sidecar (`sidecars/LeaveTheLightsOff.omw2mwse.toml`),
-  after a developer-only warning.
-- Every build is marked as an unofficial mwsuite conversion: report issues to
-  mwsuite / dej (dejunai), not to the original author.
+| Path | Contents |
+|---|---|
+| `MWSE/mods/mwsuite/openmw/<mod>/` | the generated loader and the mod's original Lua scripts |
+| `MWSE/lib/omwcompat*` | the shared runtime |
+| `Off/<mod>/OpenMW/` | the complete original package, untouched, for reference or reverting |
+| original assets (`meshes/`, `textures/`, ...) | kept where the author put them |
 
-## License
+**Plugins**
 
-MIT, Copyright (c) 2026 dej (dejunai). See [LICENSE](LICENSE). The mods hosted by
-omwcompat keep their own authors' licenses.
+- `.omwaddon` / `.omwgame` files use the same format as `.esp` / `.esm`, so only the
+  extension changes.
+- A plugin at the package root stays at the root and is enabled by default.
+- A plugin in a subfolder goes to `Extras/<mod>/` for you to inspect.
+- A root plugin that is provably obsolete (only used by code for old OpenMW versions)
+  goes to `Off/` only.
+
+**Verdict.** Every conversion gets a verdict: **ready** (every API the mod uses is provided,
+fully or partially) or **blocked** (it needs something omwcompat does not have yet). Don't
+enable a blocked mod.
+
+## The "MW Conversions" menu
+
+All converted mods share one Mod Config Menu entry, **MW Conversions**:
+
+- **Tab 1** is a general disclaimer.
+- **Then one tab per converted mod**, showing the original mod's name and author, its
+  settings (if any), and that support for the conversion goes to **dej (dejunai)** via the
+  Nexus Mods forums.
+
+## Rights and support
+
+- The original authors **retain all rights** to their mods.
+- **Distributing converted mods is forbidden.** Conversions are generated locally for your
+  own personal use.
+- **Do not contact the original authors** about a converted mod. Report problems to
+  dej (dejunai) on the Nexus Mods forums.
+
+## Known limits
+
+- Not provided yet: `openmw.ui`, `openmw.animation`, `openmw.ambient`, `openmw.camera`,
+  `openmw.input`, `openmw.postprocessing`, `openmw.debug`, `openmw.menu`, `openmw_aux.ui`.
+- Not hosted yet: `PLAYER`, `MENU`, `CUSTOM` (`addScript`), `LOAD` and `ITEM` scripts.
+- `openmw.nearby` has no `castRay` or pathfinding; `I.AI` only removes combat packages;
+  events sent to an object outside the active cells are dropped. See
+  [docs/GAPS.md](docs/GAPS.md).
+- HUD mods (for example ammo counters and compasses) are out of scope.
+- **Shared runtime conflict:** every converted mod ships a copy of `MWSE/lib/omwcompat*`, so
+  Vortex reports a file conflict between them. Let the mod with the **newest runtime** win.
+  Newer runtimes still run older conversions.
+- No save migration: if a conversion ever needs a new game, it says so.
+
+## Tested mods
+
+| Mod | Nexus | Status | Notes |
+|---|---|---|---|
+| Leave The Lights Off | [57510](https://www.nexusmods.com/morrowind/mods/57510) | ready | global script, settings MCM |
+| No Fires in Bad Weather | [57579](https://www.nexusmods.com/morrowind/mods/57579) | ready | global script + required plugin |
+| Wildlife Attacks NPCs Too | [54448](https://www.nexusmods.com/morrowind/mods/54448) | ready | creature script; old-API plugin goes to `Off/` |
+| No More Excessive Healing | [58337](https://www.nexusmods.com/morrowind/mods/58337) | blocked | player/menu scripts, `ui`, `ambient` |
+| Player On Fire | [58345](https://www.nexusmods.com/morrowind/mods/58345) | blocked | player/menu scripts, `animation`, `ambient`, `postprocessing` |
+| Thieves Pickpocket | [58362](https://www.nexusmods.com/morrowind/mods/58362) | blocked | player/menu/custom scripts, `ui`, `animation`, `ambient` |
+| Vaults Restricted | [58405](https://www.nexusmods.com/morrowind/mods/58405) | blocked | player/menu/custom scripts, `ui`, `animation` |
+
+"Ready" means the converter and the test suite accept it. In-game testing is ongoing.
+
+## Roadmap
+
+Planned, in no particular order and without dates:
+
+- tidy running the converter automatically on Vortex installs, with omw2mwse and
+  omwcompat shipped in the conflict-tools deploy.
+- Player and menu script hosting, then the `ui`, `animation` and `ambient` modules.
+- `omw2mwse revert`, to restore a mod from its `Off/` copy.
+- Integration with the MWManager GUI.
+
+## Credits and license
+
+By **dej (dejunai)**. The tool is MIT licensed; see [LICENSE](LICENSE). Converted mods remain
+the property of their original authors and keep their own licenses.
+
+Developer notes: [docs/DEVELOPER.md](docs/DEVELOPER.md).
