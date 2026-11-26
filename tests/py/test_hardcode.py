@@ -448,3 +448,57 @@ I.Settings.registerGroup({ key = 'SettingsY', settings = { { key = 'c', default 
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PluginRename(unittest.TestCase):
+    """A root .omwaddon is TES3 like an .esp; Morrowind loads only .esp/.esm."""
+
+    def _staged(self, t, extra=()):
+        root = make_staged(Path(t))
+        (root / "Fires.omwaddon").write_bytes(b"TES3\x00addon")
+        for n, b in extra:
+            (root / n).write_bytes(b)
+        return root
+
+    def test_omwaddon_installed_as_esp_and_original_kept_in_off(self):
+        with tempfile.TemporaryDirectory() as t:
+            root = self._staged(t)
+            r = convert(root, "normal")
+            self.assertEqual(r["exitCode"], EXIT_OK)
+            name = r["mods"][0]["name"]
+            self.assertEqual((root / "Fires.esp").read_bytes(), b"TES3\x00addon")
+            self.assertFalse((root / "Fires.omwaddon").exists())
+            self.assertTrue((root / f"Off/{name}/OpenMW/Fires.omwaddon").is_file())
+            self.assertIn("Fires.esp", r["mods"][0]["files"])
+            md = (root / f"{name}-metadata.toml").read_text(encoding="utf-8")
+            self.assertIn("Fires.omwaddon -> Fires.esp", md)
+            rm = (root / f"MWSE/mods/mwsuite/openmw/{name}/README-mwsuite.md").read_text(encoding="utf-8")
+            self.assertIn("`Fires.esp`", rm)
+            rep = (root / f"MWSE/mods/mwsuite/openmw/{name}/OMW2MWSE-REPORT.md").read_text(encoding="utf-8")
+            self.assertIn("as `Fires.esp`", rep)
+            man = json.loads((root / f"MWSE/mods/mwsuite/openmw/{name}/omw2mwse-manifest.json").read_text())
+            self.assertIn("Fires.esp", man["files"])
+            self.assertNotIn("Fires.omwaddon", man["files"])
+            # idempotent: second run changes nothing and keeps the .esp
+            r2 = convert(root, "normal")
+            self.assertFalse(r2["changed"])
+            self.assertTrue((root / "Fires.esp").is_file())
+
+    def test_clash_with_shipped_esp_is_not_overwritten(self):
+        with tempfile.TemporaryDirectory() as t:
+            root = self._staged(t, extra=[("Fires.esp", b"TES3\x00other")])
+            r = convert(root, "normal")
+            codes = [a["code"] for a in r["mods"][0]["alerts"]]
+            self.assertIn("plugin-rename-clash", codes)
+            self.assertEqual((root / "Fires.esp").read_bytes(), b"TES3\x00other")
+
+    def test_tidy_flag_form(self):
+        self.assertEqual(translate_tidy_flag(["--convert-omwscripts=hardcode", "D", "--json"]),
+                         ["convert", "D", "--json", "--mode", "hardcode"])
+        with tempfile.TemporaryDirectory() as t:
+            root = self._staged(t)
+            buf = io.StringIO()
+            with redirect_stdout(buf), redirect_stderr(io.StringIO()):
+                rc = main(["--convert-omwscripts=hardcode", str(root), "--accept-hardcode-conversions", "--json"])
+            self.assertEqual(rc, EXIT_OK)
+            self.assertEqual(json.loads(buf.getvalue())["mode"], "hardcode")

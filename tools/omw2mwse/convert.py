@@ -26,6 +26,7 @@ from . import __version__
 from . import sidecar as SC
 from . import warn
 from .build import (MANIFEST_NAME, BuildError, Writer, build, is_game_asset, iter_original_files, mod_dir,
+                    renamed_plugin,
                     notice_text, original_off_prefix, sha256b, text_bytes)
 from .scan import load_manifest
 
@@ -124,7 +125,7 @@ def relocate_original(src: Path, staged: Path, name: str) -> list[str]:
                 continue
         except OSError:
             continue
-        if src_is_root and is_game_asset(rel):
+        if src_is_root and is_game_asset(rel) and not renamed_plugin(rel):
             continue
         if sha256b(p.read_bytes()) != sha256b(new.read_bytes()):
             continue

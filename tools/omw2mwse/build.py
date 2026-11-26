@@ -96,6 +96,22 @@ def is_game_asset(rel: str) -> bool:
     return False
 
 
+# OpenMW-only content-file extensions. The files are TES3 format, byte-identical to
+# .esp/.esm; the original engine loads only .esp/.esm, so the converter renames them.
+PLUGIN_RENAMES = {".omwaddon": ".esp", ".omwgame": ".esm"}
+
+
+def renamed_plugin(rel: str) -> str | None:
+    """Data Files root name for a root-level .omwaddon/.omwgame (None if not renamed)."""
+    rel = rel.replace("\\", "/")
+    if "/" in rel:
+        return None
+    suf = Path(rel).suffix.lower()
+    if suf not in PLUGIN_RENAMES:
+        return None
+    return rel[: -len(suf)] + PLUGIN_RENAMES[suf]
+
+
 def iter_original_files(src: Path):
     """Yield (path, posix-rel) for every file that belongs to the original OpenMW package."""
     src = Path(src)
@@ -444,7 +460,7 @@ def notice_text(c: dict) -> str:
     return s
 
 
-def render_readme(name: str, c: dict, mode: str, accepted: list) -> str:
+def render_readme(name: str, c: dict, mode: str, accepted: list, renamed: list | None = None) -> str:
     author = c.get("author") or "unknown"
     lines = [f"# {c['title']} for MWSE (unofficial mwsuite conversion)", "",
              notice_text(c), "",
@@ -465,7 +481,10 @@ def render_readme(name: str, c: dict, mode: str, accepted: list) -> str:
              f"- `Off/{name}/OpenMW/`: the complete original OpenMW package, untouched",
              "- `MWSE/lib/omwcompat/`: the runtime that hosts it (shared by all converted mods)",
              f"- In game: Mod Config menu entry `{MCM_NAME}`, tab `{c['title']}` (always present; it lists "
-             "the original mod, its author and who to ask for support)", ""]
+             "the original mod, its author and who to ask for support)"]
+    for old, new in renamed or []:
+        lines.append(f"- `{new}`: the original `{old}` renamed (same TES3 format); enable it in your load order")
+    lines.append("")
     return "\n".join(lines)
 
 
@@ -535,8 +554,12 @@ def _toml_str(s: str) -> str:
     return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-def render_metadata(name: str, src_name: str, credits: dict | None = None) -> str:
+def render_metadata(name: str, src_name: str, credits: dict | None = None, renamed: list | None = None) -> str:
     c = credits or {"title": src_name}
+    plugins = ""
+    if renamed:
+        plugins = ("\n# Plugins renamed from the OpenMW package (originals kept under Off/):\n"
+                   + "".join(f"#   {o} -> {n}\n" for o, n in renamed))
     author = c.get("author") or "original author unknown"
     return (
         "[package]\n"
@@ -547,6 +570,7 @@ def render_metadata(name: str, src_name: str, credits: dict | None = None) -> st
         + "\n"
         "[tools.mwse]\n"
         f"lua-mod = {_toml_str(lua_mod_id(name))}\n"
+        + plugins
     )
 
 
@@ -570,6 +594,7 @@ class BuildResult:
     off_rel: str = ""
     mod_rel: str = ""
     off_copied: list = field(default_factory=list)  # original-package relative paths
+    plugins_renamed: list = field(default_factory=list)  # (original rel, Data Files root rel)
 
 
 def build(src: Path, writer: Writer, name: str, *, data_prefix: str = "", slug: str | None = None,
@@ -595,12 +620,23 @@ def build(src: Path, writer: Writer, name: str, *, data_prefix: str = "", slug: 
     res.mod_rel = mdir
 
     # 0. Complete original OpenMW package at Off/<plugin>/OpenMW/<original paths>
-    for p, rel in iter_original_files(src):
+    originals = list(iter_original_files(src))
+    present = {rel.lower() for _, rel in originals}
+    for p, rel in originals:
         data = p.read_bytes()
         writer.put(off + rel, data)
         res.off_copied.append(rel)
         if is_game_asset(rel):
-            writer.put(D + rel, data)
+            new = renamed_plugin(rel)
+            if new and new.lower() in present:
+                res.alerts.append({"level": "warning", "code": "plugin-rename-clash",
+                                   "message": f"{rel} not renamed: the package also ships {new}; "
+                                              f"{rel} is kept only under Off/"})
+                continue
+            if new:
+                res.plugins_renamed.append((rel, new))
+                res.notes.append(f"{rel} installed as {new} (same TES3 format; Morrowind loads only .esp/.esm)")
+            writer.put(D + (new or rel), data)
 
     # 1. Lua placement
     declared = {s.path.lower(): s.path for s in scan.scripts}
@@ -718,8 +754,8 @@ def build(src: Path, writer: Writer, name: str, *, data_prefix: str = "", slug: 
     res.credits = cred
     writer.put(f"{mdir}main.lua", text_bytes(render_main(name, scan.scripts, meshmap, probe, cfg,
                                                                         title or cred.get("title"), cred)))
-    writer.put(f"{D}{name}-metadata.toml", text_bytes(render_metadata(name, src.name, cred)))
-    writer.put(f"{mdir}README-mwsuite.md", text_bytes(render_readme(name, cred, mode, accepted)))
+    writer.put(f"{D}{name}-metadata.toml", text_bytes(render_metadata(name, src.name, cred, res.plugins_renamed)))
+    writer.put(f"{mdir}README-mwsuite.md", text_bytes(render_readme(name, cred, mode, accepted, res.plugins_renamed)))
     if with_runtime:
         writer.put(f"{D}MWSE/lib/omwcompat.lua", (RUNTIME_LIB / "omwcompat.lua").read_bytes())
         for f in sorted((RUNTIME_LIB / "omwcompat").iterdir()):
@@ -768,7 +804,9 @@ def render_report(res: BuildResult, mode: str) -> str:
                 "Contents are byte-identical to the source. Game-loadable assets (meshes, textures, "
                 "and so on) are also installed at the Data Files root so Morrowind can find them.", ""]
         for rel in res.off_copied:
-            extra = " (also at the Data Files root)" if is_game_asset(rel) else ""
+            new = dict(res.plugins_renamed).get(rel)
+            extra = (f" (installed at the Data Files root as `{new}`)" if new
+                     else " (also at the Data Files root)" if is_game_asset(rel) else "")
             rep.append(f"- `{res.off_rel}{rel}`{extra}")
     rep += ["", "## Files", ""]
     for r, t, rewritten in res.copied:
