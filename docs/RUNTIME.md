@@ -21,7 +21,7 @@ require("omwcompat").register({ mod = "<Mod>", root = "Data Files/MWSE/mods/mwsu
     scripts = { { flags = { "GLOBAL" }, path = "scripts/..." } }, meshmap = { ... } })
 ```
 
-**Layout (0.2.1).** All converted mods live under `MWSE/mods/mwsuite/openmw/<Mod>/` (MWSE loads
+**Layout (0.2.1, unchanged in 0.2.2).** All converted mods live under `MWSE/mods/mwsuite/openmw/<Mod>/` (MWSE loads
 `main.lua` at any depth), so they are easy to find next to the suite's own mods. The hosted
 OpenMW Lua is in that folder's `omw/` subfolder, loaded with `loadfile`, not `require`, so no
 `mwsuite.openmw.<Mod>` module path is involved. MWSE runs *every* `main.lua` it finds under

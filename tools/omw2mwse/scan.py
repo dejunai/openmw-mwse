@@ -391,6 +391,86 @@ def read_text(p: Path) -> str:
     return data.decode("utf-8", errors="replace")
 
 
+def _norm_rel(rel: str) -> str:
+    return rel.replace("\\", "/").lower()
+
+
+def resolve_local_module(mod: str, by_rel: dict[str, str], from_rel: str | None = None) -> str | None:
+    """Map a require() module name to a Lua path in this package, if one exists."""
+    cand = mod.replace("\\", "/").replace(".", "/")
+    cand = cand.lstrip("/")
+    options = [cand + ".lua", cand + "/init.lua"]
+    if from_rel:
+        parts = Path(from_rel).as_posix().split("/")
+        # require() is VFS-style from a data root; try every ancestor as that root
+        # so mod/scripts/X/a.lua requiring scripts.X.b finds mod/scripts/X/b.lua.
+        for i in range(len(parts)):
+            prefix = "/".join(parts[:i])
+            if prefix:
+                options.extend((prefix + "/" + cand + ".lua", prefix + "/" + cand + "/init.lua"))
+        parent = "/".join(parts[:-1])
+        if parent:
+            options.extend((parent + "/" + cand + ".lua", parent + "/" + cand + "/init.lua"))
+    for suffix in options:
+        hit = by_rel.get(_norm_rel(suffix))
+        if hit:
+            return hit
+    return None
+
+
+def loaded_lua_paths(scripts: list[ScriptEntry], files: list[FileScan]) -> set[str] | None:
+    """Lua files .omwscripts will load: declared scripts plus local require()s.
+
+    Returns None when there is no .omwscripts, so every Lua file is counted.
+    """
+    if not scripts:
+        return None
+    by_rel = {_norm_rel(f.path): f.path for f in files}
+    by_name: dict[str, list[str]] = {}
+    for f in files:
+        by_name.setdefault(Path(f.path).name.lower(), []).append(f.path)
+    file_by = {f.path: f for f in files}
+    loaded: set[str] = set()
+    queue: list[str] = []
+    for s in scripts:
+        candidates = []
+        if s.source:
+            parent = str(Path(s.source).parent).replace("\\", "/")
+            if parent not in (".", ""):
+                candidates.append(parent + "/" + s.path)
+        candidates.append(s.path)
+        hit = None
+        for c in candidates:
+            hit = by_rel.get(_norm_rel(c))
+            if hit:
+                break
+        if hit is None:
+            cands = by_name.get(Path(s.path).name.lower(), [])
+            if len(cands) == 1:
+                hit = cands[0]
+        if hit is not None:
+            queue.append(hit)
+    while queue:
+        rel = queue.pop()
+        if rel in loaded:
+            continue
+        loaded.add(rel)
+        fs = file_by.get(rel)
+        if fs is None:
+            continue
+        mods: list[str] = []
+        for mod in list(fs.local_requires) + list(fs.requires.values()):
+            if mod.startswith("openmw.") or mod.startswith("openmw_aux."):
+                continue
+            if mod not in mods:
+                mods.append(mod)
+        for mod in mods:
+            hit = resolve_local_module(mod, by_rel, rel)
+            if hit is not None and hit not in loaded:
+                queue.append(hit)
+    return loaded
+
+
 def scan_mod(root: Path, manifest: dict | None = None, name: str | None = None) -> ModScan:
     manifest = manifest or load_manifest()
     root = Path(root)
@@ -399,6 +479,8 @@ def scan_mod(root: Path, manifest: dict | None = None, name: str | None = None) 
     for om in find_omwscripts(root):
         scripts.extend(parse_omwscripts(read_text(om), str(om.relative_to(root))))
     files = [scan_lua(read_text(p), str(p.relative_to(root)).replace(os.sep, "/"), method_names) for p in find_lua_files(root)]
+    loaded = loaded_lua_paths(scripts, files)
+    counted = files if loaded is None else [f for f in files if f.path in loaded]
     symbols: dict[str, dict] = {}
     handlers: dict[str, str] = {}
     events: list[str] = []
@@ -408,12 +490,21 @@ def scan_mod(root: Path, manifest: dict | None = None, name: str | None = None) 
     blockers: list[str] = []
     warnings: list[str] = []
     unsup_set = set(manifest["unsupportedModules"])
-    # interfaces provided by the mod itself
+    # interfaces provided by the mod itself (only from scripts that will actually load)
     provided = set()
-    for p in find_lua_files(root):
-        for m in re.finditer(r"interfaceName\s*=\s*['\"]([A-Za-z0-9_]+)['\"]", read_text(p)):
-            provided.add(m.group(1))
-    for f in files:
+    for f in counted:
+        srcp = root / f.path
+        if srcp.is_file():
+            for m in re.finditer(r"interfaceName\s*=\s*['\"]([A-Za-z0-9_]+)['\"]", read_text(srcp)):
+                provided.add(m.group(1))
+    if loaded is not None:
+        for f in files:
+            if f.path not in loaded:
+                warnings.append(
+                    f"{f.path} is not declared in .omwscripts and is not required "
+                    "by a declared script; ignored for the verdict"
+                )
+    for f in counted:
         if f.error:
             blockers.append(f"{f.path}: tokenizer error: {f.error}")
         for alias, mod in f.requires.items():
@@ -475,8 +566,8 @@ def scan_mod(root: Path, manifest: dict | None = None, name: str | None = None) 
     known = manifest.get("settingsRenderers", {})
     renderers: dict[str, dict] = {}
     groups = []
-    custom = sorted({r for f in files for r in f.custom_renderers})
-    for f in files:
+    custom = sorted({r for f in counted for r in f.custom_renderers})
+    for f in counted:
         for g in f.settings:
             groups.append({"key": g["key"], "file": f.path, "settings": len(g["settings"]), "dynamic": g["dynamic"]})
             for st in g["settings"]:
@@ -491,17 +582,17 @@ def scan_mod(root: Path, manifest: dict | None = None, name: str | None = None) 
     # hard-coded constant candidates (reported; converted only by `convert --mode hardcode` / sidecar)
     from .constants import detect  # local import: constants imports luatok only
     hard = []
-    for p in find_lua_files(root):
-        rel = str(p.relative_to(root)).replace(os.sep, "/")
+    hard_files = counted if loaded is not None else files
+    for f in hard_files:
         try:
-            consts, inline = detect(read_text(p))
+            consts, inline = detect(read_text(root / f.path))
         except LuaSyntaxError:
             continue
         for c in consts:
             if c.eligible:
-                hard.append(dict(c.to_json(), file=rel, kind="constant"))
+                hard.append(dict(c.to_json(), file=f.path, kind="constant"))
         for x in inline:
-            hard.append(dict(x.to_json(), file=rel, kind="literal"))
+            hard.append(dict(x.to_json(), file=f.path, kind="literal"))
     return ModScan(name or root.name, str(root), scripts, files, symbols, handlers, events, methods, flags,
                    unsup_mods, meshes, blockers, warnings, settings_info, hard)
 

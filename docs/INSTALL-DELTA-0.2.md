@@ -1,4 +1,4 @@
-> **Superseded by 0.2.1** (new layout under MWSE/mods/mwsuite/openmw/, one "MW Conversions" MCM). Kept as the record of the 0.2.0 delta; use the 0.2.1 7z instead.
+> **Superseded by 0.2.2** (0.2.1 layout under MWSE/mods/mwsuite/openmw/, one "MW Conversions" MCM; 0.2.2 is built from official LTLO 3.2). Kept as the record of the 0.2.0 delta; use the 0.2.2 7z instead.
 
 # Install delta 0.2: LTLO with MCM (staged on the box only, NOT applied)
 

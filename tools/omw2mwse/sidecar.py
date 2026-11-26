@@ -17,7 +17,7 @@
     [[literal]]                            # a literal inside an expression
     key = "DAY_START"
     file = "scripts/LeaveTheLightsOff/LTLO_g.lua"
-    line = 393
+    line = 396
     context = "clockHour < 7"              # must occur exactly once on that line
     literal = "7"                          # optional when the context holds one literal
     label = "..."  min = 0  max = 24  integer = true

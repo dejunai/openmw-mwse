@@ -7,7 +7,7 @@ local objects = require("omwcompat.objects")
 local settings = require("omwcompat.settings")
 local conversions = require("omwcompat.conversions")
 
-local RT = { VERSION = "0.2.1", API_REVISION = 70, PROBE_API_REVISION = 100 }
+local RT = { VERSION = "0.2.2", API_REVISION = 70, PROBE_API_REVISION = 100 }
 objects.init(RT)
 settings.init(RT)
 

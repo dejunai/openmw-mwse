@@ -52,6 +52,6 @@ def package(src: Path, out: Path, name: str | None = None, slug: str | None = No
     if _tree_hashes(src) != before:
         raise PackageError("source tree changed during packaging (this is a bug)")
     return {"out": str(out), "name": res.name, "slug": res.slug, "verdict": res.scan.verdict, "aliases": res.aliases,
-            "copied": [(str(src / a), str(out / "Data Files" / "MWSE" / "omw" / res.name / b)) for a, b, _ in res.copied],
+            "copied": [(str(src / a), str(out / "Data Files" / "MWSE" / "mods" / "mwsuite" / "openmw" / res.name / "omw" / b)) for a, b, _ in res.copied],
             "notes": res.notes, "blockers": res.scan.blockers, "rewrites": [c.to_json() for c in res.accepted],
             "alerts": res.alerts, "result": res}

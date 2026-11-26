@@ -101,7 +101,7 @@ omw2mwse outputs, such as `MWSE/mods/LTLOHandportMigration/`, are never deleted.
 
 ```json
 {
- "tool": "omw2mwse", "version": "0.2.1", "command": "convert", "mode": "normal",
+ "tool": "omw2mwse", "version": "0.2.2", "command": "convert", "mode": "normal",
  "dir": "...", "dryRun": false, "changed": true, "exitCode": 0, "alerts": [],
  "mods": [{
    "name": "LeaveTheLightsOff", "source": "Off/LeaveTheLightsOff/OpenMW",
@@ -115,7 +115,7 @@ omw2mwse outputs, such as `MWSE/mods/LTLOHandportMigration/`, are never deleted.
    "notice": "Unofficial mwsuite conversion of ... (original author: ...). Unofficial conversion by mwsuite. Do not contact the original author about it. Support: dej (dejunai) via the Nexus Mods forums.",
    "alerts": [
      {"level": "info", "code": "hardcode-candidate", "file": "scripts/LeaveTheLightsOff/LTLO_g.lua",
-      "line": 393, "kind": "literal", "context": "clockHour < 7", "type": "number", "value": "7",
+      "line": 396, "kind": "literal", "context": "clockHour < 7", "type": "number", "value": "7",
       "function": "onUpdate", "autoPick": false, "message": "..."},
      {"level": "error", "code": "blocker", "message": "requires unsupported module openmw.ui"},
      {"level": "warning", "code": "settings-renderer-fallback", "renderer": "SuperSlider6", "count": 4}

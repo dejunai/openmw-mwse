@@ -1,4 +1,4 @@
-# Known gaps and risks (omwcompat 0.2.1 + LTLO)
+# Known gaps and risks (omwcompat 0.2.2 + LTLO 3.2)
 
 ## What has been verified, and only on the box
 

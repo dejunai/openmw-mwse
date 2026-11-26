@@ -125,6 +125,62 @@ class ModScanTests(unittest.TestCase):
         s = scan_mod(ref, MANIFEST)
         self.assertEqual(s.verdict, "ready", s.blockers)
 
+    def test_undeclared_lua_does_not_block(self):
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t)
+            _make_mod(root, script_src="local world = require('openmw.world')\nreturn {}\n")
+            (root / "scripts" / "M" / "debug.lua").write_text(
+                "local ui = require('openmw.ui')\nlocal input = require('openmw.input')\nreturn {}\n",
+                encoding="utf-8",
+            )
+            s = scan_mod(root, MANIFEST)
+            self.assertEqual(s.verdict, "ready", s.blockers)
+            self.assertTrue(any("debug.lua" in w and "ignored for the verdict" in w for w in s.warnings), s.warnings)
+
+    def test_required_local_module_can_block(self):
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t)
+            src = "local d = require('scripts.M.debug')\nlocal world = require('openmw.world')\nreturn {}\n"
+            _make_mod(root, script_src=src)
+            (root / "scripts" / "M" / "debug.lua").write_text(
+                "local ui = require('openmw.ui')\nreturn {}\n",
+                encoding="utf-8",
+            )
+            s = scan_mod(root, MANIFEST)
+            self.assertEqual(s.verdict, "blocked", s.blockers)
+            self.assertTrue(any("openmw.ui" in b for b in s.blockers), s.blockers)
+
+    def test_omwscripts_in_subdir_resolves_declared_paths(self):
+        """Declared paths are relative to the .omwscripts parent, not the scan root."""
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t)
+            src = root / "mod"
+            (src / "scripts" / "X").mkdir(parents=True)
+            (src / "scripts" / "X" / "g.lua").write_text(
+                "local h = require('scripts.X.helper')\nlocal world = require('openmw.world')\nreturn {}\n",
+                encoding="utf-8",
+            )
+            (src / "scripts" / "X" / "helper.lua").write_text(
+                "local types = require('openmw.types')\nreturn {}\n", encoding="utf-8",
+            )
+            (src / "scripts" / "X" / "debug.lua").write_text(
+                "local ui = require('openmw.ui')\nreturn {}\n", encoding="utf-8",
+            )
+            (src / "X.omwscripts").write_text("GLOBAL: scripts/X/g.lua\n", encoding="utf-8")
+            s = scan_mod(root, MANIFEST)
+            self.assertEqual(s.verdict, "ready", s.blockers)
+            self.assertTrue(any("debug.lua" in w and "ignored for the verdict" in w for w in s.warnings), s.warnings)
+            self.assertFalse(any("helper.lua" in w for w in s.warnings), s.warnings)
+
+    def test_official_ltlo_32_is_ready(self):
+
+        src = ROOT / "corpus" / "leave-the-lights-off" / "_archive" / "full" / "LeaveTheLightsOff"
+        if not (src / "LeaveTheLightsOff.omwscripts").is_file():
+            self.skipTest("official LTLO 3.2 extract not present (git-ignored corpus)")
+        s = scan_mod(src, MANIFEST)
+        self.assertEqual(s.verdict, "ready", s.blockers)
+        self.assertTrue(any("ui_debugWidget.lua" in w and "ignored for the verdict" in w for w in s.warnings), s.warnings)
+
 
 class PackageTests(unittest.TestCase):
     def test_slug_and_alias(self):
@@ -175,7 +231,25 @@ class PackageTests(unittest.TestCase):
             with self.assertRaises(PackageError):
                 package(src, src / "inside", name="M")
 
+    def test_alias_copied_from_source_meshes(self):
+        """Long meshes that already live in the source tree get aliases without --meshes-from."""
+        with tempfile.TemporaryDirectory() as t:
+            src, out = Path(t) / "src", Path(t) / "out"
+            src.mkdir()
+            _make_mod(src)
+            long_rel = "very/long/path/that/is/over/31/chars.nif"
+            mesh = src / "meshes" / long_rel
+            mesh.parent.mkdir(parents=True)
+            mesh.write_bytes(b"NIFSRC")
+            r = package(src, out, name="M")
+            alias = r["aliases"][0][1]
+            self.assertEqual(r["aliases"][0][2], "copied")
+            self.assertEqual((out / "Data Files" / "meshes" / alias).read_bytes(), b"NIFSRC")
+            self.assertEqual((out / "Data Files" / "meshes" / long_rel).read_bytes(), b"NIFSRC")
+            self.assertFalse(any(a.get("code") == "mesh-missing" for a in r["alerts"]))
+
     def test_meshes_from(self):
+
         with tempfile.TemporaryDirectory() as t:
             src, out, meshes = Path(t) / "src", Path(t) / "out", Path(t) / "meshes"
             src.mkdir()

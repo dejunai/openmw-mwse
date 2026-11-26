@@ -685,18 +685,23 @@ def build(src: Path, writer: Writer, name: str, *, data_prefix: str = "", slug: 
         n = normalize_mesh(m)
         if len(n) > MAX_MESH and n not in meshmap:
             meshmap[n] = mesh_alias(slug, n)
+    alias_sources = list(meshes_from or [])
+    src_meshes = src / "meshes"
+    if src_meshes.is_dir() and src_meshes not in alias_sources:
+        alias_sources.append(src_meshes)
     for n, a in sorted(meshmap.items()):
         status = "not copied (copy on install)"
-        for mf in meshes_from or []:
+        found = False
+        for mf in alias_sources:
             srcmesh = Path(mf) / n
             if srcmesh.is_file():
                 writer.put(f"{D}meshes/{a}", srcmesh.read_bytes())
                 status = "copied"
+                found = True
                 break
-        else:
-            if meshes_from:
-                status = "source mesh missing"
-                res.alerts.append({"level": "warning", "code": "mesh-missing", "message": f"meshes/{n} not found; alias {a} not written"})
+        if not found and meshes_from:
+            status = "source mesh missing"
+            res.alerts.append({"level": "warning", "code": "mesh-missing", "message": f"meshes/{n} not found; alias {a} not written"})
         res.aliases.append((n, a, status))
 
     # 4. loader, metadata, runtime

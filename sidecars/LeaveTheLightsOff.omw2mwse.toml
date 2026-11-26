@@ -17,7 +17,7 @@ description = "These values were hard-coded in the original and are exposed by o
 [[literal]]
 key = "NIGHT_END_HOUR"
 file = "scripts/LeaveTheLightsOff/LTLO_g.lua"
-line = 393
+line = 396
 context = "clockHour < 7"
 label = "Night ends at (hour)"
 description = "Lights are lit while the game hour is below this value."
@@ -28,7 +28,7 @@ integer = true
 [[literal]]
 key = "NIGHT_START_HOUR"
 file = "scripts/LeaveTheLightsOff/LTLO_g.lua"
-line = 393
+line = 396
 context = "clockHour > 18"
 label = "Night starts after (hour)"
 description = "Lights are lit while the game hour is above this value."
@@ -39,7 +39,7 @@ integer = true
 [[literal]]
 key = "WEATHER_CHECK_FRAMES"
 file = "scripts/LeaveTheLightsOff/LTLO_g.lua"
-line = 371
+line = 374
 context = "weatherUpdater >= 30"
 label = "Weather check interval (frames)"
 description = "How many frames pass between weather checks. Lower reacts faster to storms; higher costs less."
@@ -57,48 +57,48 @@ max = 5.0
 [[literal]]
 key = "DARK_RAIN"
 file = "scripts/LeaveTheLightsOff/LTLO_g.lua"
-line = 357
+line = 360
 context = "Rain = false"
 label = "Light up during rain"
 
 [[literal]]
 key = "DARK_THUNDERSTORM"
 file = "scripts/LeaveTheLightsOff/LTLO_g.lua"
-line = 358
+line = 361
 context = "Thunderstorm = false"
 label = "Light up during thunderstorms"
 
 [[literal]]
 key = "DARK_FOGGY"
 file = "scripts/LeaveTheLightsOff/LTLO_g.lua"
-line = 355
+line = 358
 context = "Foggy = false"
 label = "Light up in fog"
 
 [[literal]]
 key = "DARK_OVERCAST"
 file = "scripts/LeaveTheLightsOff/LTLO_g.lua"
-line = 356
+line = 359
 context = "Overcast = false"
 label = "Light up when overcast"
 
 [[literal]]
 key = "DARK_ASHSTORM"
 file = "scripts/LeaveTheLightsOff/LTLO_g.lua"
-line = 359
+line = 362
 context = "Ashstorm = true"
 label = "Light up during ash storms"
 
 [[literal]]
 key = "DARK_BLIGHT"
 file = "scripts/LeaveTheLightsOff/LTLO_g.lua"
-line = 360
+line = 363
 context = "Blight = true"
 label = "Light up during blight storms"
 
 [[literal]]
 key = "DARK_BLIZZARD"
 file = "scripts/LeaveTheLightsOff/LTLO_g.lua"
-line = 361
+line = 364
 context = "Blizzard = true"
 label = "Light up during blizzards"
