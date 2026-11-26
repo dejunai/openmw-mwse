@@ -1,0 +1,8 @@
+# third-party / unlicensed material and generated output: never committed
+/reference/
+/corpus/
+/staging/
+/reports/generated/
+__pycache__/
+*.pyc
+/tests/tmp/

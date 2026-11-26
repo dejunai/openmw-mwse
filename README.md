@@ -1,0 +1,56 @@
+# openmw-mwse
+
+Run OpenMW-only Lua mods on the original Morrowind engine with MWSE.
+
+A personal project by **dej (dejunai)**, built with Grok Bot.
+
+It has two parts (see [DESIGN.md](DESIGN.md) for the reasoning):
+
+- **omwcompat** (`runtime/MWSE/lib/`) is an MWSE Lua library. It provides the `openmw.*` API
+  (`world`, `types`, `core` + weather, `util`, `async`, `storage`, `vfs`, `interfaces`
+  with Activation, plus `openmw_aux.calendar/util/time`). It hosts the mod's unmodified
+  GLOBAL scripts with OpenMW's engine handlers and save/load semantics.
+- **omw2mwse** (`tools/omw2mwse`, Python 3.13+, stdlib only) is the CLI.
+  - `scan` reports which OpenMW APIs a mod uses and whether omwcompat supports each one.
+  - `package` builds an MWSE mod folder. The original Lua is copied byte-for-byte. A
+    generated `main.lua` loader is added, and mesh paths over 31 characters get short aliases.
+
+The first target is **Leave The Lights Off** by OwnlyMe (Nexus 57510). Its original
+`LTLO_g.lua` runs unmodified on MWSE through omwcompat.
+
+## Quick start
+
+```sh
+bin/omw2mwse scan path/to/openmw-mod
+bin/omw2mwse package path/to/openmw-mod --name ModName --out staging/ModName
+tests/run_lua_tests.sh                       # LuaJIT + MWSE mock scenarios
+python3 -m unittest discover -s tests/py     # CLI unit tests
+```
+
+The output of `package` mirrors `Data Files`:
+
+```
+Data Files/MWSE/mods/<Mod>/main.lua          generated loader (register with omwcompat)
+Data Files/MWSE/omw/<Mod>/...                original .omwscripts + Lua, untouched
+Data Files/MWSE/lib/omwcompat.lua, omwcompat/ the runtime (unless --no-runtime)
+Data Files/<Mod>-metadata.toml               MWSE metadata
+MESH-ALIASES.txt                             long mesh path -> meshes/omwc/<slug>/<hash>.nif
+OMW2MWSE-REPORT.md                           scan + file list with hashes
+```
+
+## Status
+
+The project is an MVP. Only GLOBAL scripts are hosted. Player, local, menu and UI scripts
+are reported by `scan` as blockers. Docs:
+- [docs/RUNTIME.md](docs/RUNTIME.md) covers how the emulation works and the four object-lifecycle rules.
+- [docs/COVERAGE.md](docs/COVERAGE.md) covers the test corpus.
+- [docs/GAPS.md](docs/GAPS.md) lists the known differences.
+- [docs/INSTALL-PLAN.md](docs/INSTALL-PLAN.md) has the LTLO install steps.
+
+The `reference/`, `corpus/` and `staging/` folders are local only and git-ignored. Third-party mods
+are personal test material and are not redistributed here.
+
+## License
+
+MIT, Copyright (c) 2026 dej (dejunai). See [LICENSE](LICENSE). The mods hosted by
+omwcompat keep their own authors' licenses.
