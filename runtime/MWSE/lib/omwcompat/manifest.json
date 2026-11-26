@@ -1,6 +1,6 @@
 {
  "runtime": "omwcompat",
- "version": "0.1.0",
+ "version": "0.2.0",
  "statuses": {
   "full": "emulated with OpenMW semantics",
   "partial": "emulated with documented differences",
@@ -56,7 +56,7 @@
   "openmw.core.getSimulationTime": "full",
   "openmw.core.getSimulationTimeScale": "stub",
   "openmw.core.isWorldPaused": "full",
-  "openmw.core.l10n": "stub",
+  "openmw.core.l10n": "partial",
   "openmw.core.quit": "stub",
   "openmw.core.sendGlobalEvent": "full",
   "openmw.core.weather.getCurrent": "partial",
@@ -64,13 +64,13 @@
   "openmw.core.weather.getTransition": "partial",
   "openmw.interfaces.Activation.addHandlerForObject": "full",
   "openmw.interfaces.Activation.addHandlerForType": "full",
-  "openmw.interfaces.Settings.registerGroup": "stub",
-  "openmw.interfaces.Settings.registerPage": "stub",
-  "openmw.interfaces.Settings.registerRenderer": "stub",
-  "openmw.interfaces.Settings.updateRendererArgument": "stub",
-  "openmw.storage.allPlayerSections": "stub",
-  "openmw.storage.globalSection": "partial",
-  "openmw.storage.playerSection": "partial",
+  "openmw.interfaces.Settings.registerGroup": "full",
+  "openmw.interfaces.Settings.registerPage": "full",
+  "openmw.interfaces.Settings.registerRenderer": "partial",
+  "openmw.interfaces.Settings.updateRendererArgument": "full",
+  "openmw.storage.allPlayerSections": "partial",
+  "openmw.storage.globalSection": "full",
+  "openmw.storage.playerSection": "full",
   "openmw.types.Activator.objectIsInstance": "full",
   "openmw.types.Activator.record": "partial",
   "openmw.types.Activator.records": "partial",
@@ -194,7 +194,10 @@
   "openmw_aux.util.deepToString": "partial",
   "openmw_aux.util.findMinScore": "full",
   "openmw_aux.util.mapFilter": "full",
-  "openmw_aux.util.mapFilterSort": "partial"
+  "openmw_aux.util.mapFilterSort": "partial",
+  "openmw.interfaces.Settings.getGroup": "partial",
+  "openmw.interfaces.Settings.getPage": "partial",
+  "openmw.storage.LIFE_TIME": "stub"
  },
  "scriptFlags": {
   "GLOBAL": "full",
@@ -262,5 +265,13 @@
   "teleport": "R2: limbo object placed on a tombstone of the same record is resurrected; else tes3.createReference",
   "moveInto": "R3: during activation, redirected to a vanilla pickup of the tombstoned original",
   "createRecord": "Light/any type with a template only; model >31 chars needs a packager mesh alias (R4)"
+ },
+ "settingsRenderers": {
+  "checkbox": "full",
+  "number": "full",
+  "select": "full",
+  "textLine": "full",
+  "color": "partial",
+  "inputBinding": "fallback"
  }
 }

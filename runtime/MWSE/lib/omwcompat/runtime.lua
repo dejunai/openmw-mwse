@@ -4,9 +4,11 @@
 local util = require("omwcompat.util")
 local serial = require("omwcompat.serial")
 local objects = require("omwcompat.objects")
+local settings = require("omwcompat.settings")
 
-local RT = { VERSION = "0.1.0", API_REVISION = 70 }
+local RT = { VERSION = "0.2.0", API_REVISION = 70, PROBE_API_REVISION = 100 }
 objects.init(RT)
+settings.init(RT)
 
 local mods = {}            -- registered mods, in registration order
 local state = {
@@ -55,6 +57,7 @@ RT.safecall = safecall
 
 function RT.generatedModel(id) return id and state.generated[id] or nil end
 function RT.activationContext() return state.activation end
+function RT.defer(fn) state.nextFrame[#state.nextFrame + 1] = fn end
 
 ---------------------------------------------------------------- path helpers
 local function normMesh(p)
@@ -154,35 +157,6 @@ local function deliverEvents()
     end
 end
 
----------------------------------------------------------------- storage (minimal)
-local function makeSection(store, name)
-    local Sec = {}
-    local subs = {}
-    local function data() store[name] = store[name] or {}; return store[name] end
-    function Sec:get(k)
-        local v = data()[k]
-        if v == nil and RT.settingDefaults[name] then v = RT.settingDefaults[name][k] end
-        if type(v) == "table" then return util.makeReadOnly(v) end
-        return v
-    end
-    function Sec:getCopy(k)
-        local v = self:get(k)
-        if type(v) ~= "table" then return v end
-        local c = {}; for a, b in pairs(data()[k] or {}) do c[a] = b end; return c
-    end
-    function Sec:set(k, v)
-        data()[k] = v
-        for _, cb in ipairs(subs) do safecall("storage subscriber", cb, name, k) end
-    end
-    function Sec:asTable() local c = {}; for a, b in pairs(RT.settingDefaults[name] or {}) do c[a] = b end; for a, b in pairs(data()) do c[a] = b end; return c end
-    function Sec:reset(t) store[name] = {}; if t then for a, b in pairs(t) do store[name][a] = b end end end
-    function Sec:removeOnExit() end
-    function Sec:setLifeTime() end
-    function Sec:subscribe(cb) subs[#subs + 1] = cb end
-    return Sec
-end
-RT.settingDefaults = {}
-
 ---------------------------------------------------------------- module construction
 local function unsupportedProxy(modname, t, fallback)
     return setmetatable(t, {
@@ -221,7 +195,7 @@ local function buildModules(m, S)
         isWorldPaused = function() return tes3.menuMode() end,
         sendGlobalEvent = function(name, data) eventQueue[#eventQueue + 1] = { name = name, data = data } end,
         getGMST = function(name) local g = tes3.findGMST(name); return g and g.value or nil end,
-        l10n = function() return function(key) return key end end,
+        l10n = function(ctx) return settings.l10n(m, ctx) end,
         quit = function() RT.warnOnce("core.quit", "core.quit ignored") end,
         contentFiles = {
             has = function(name) return tes3.isModActive(name) end,
@@ -321,9 +295,10 @@ local function buildModules(m, S)
     })
 
     local storage = unsupportedProxy("openmw.storage", {
-        globalSection = function(name) return makeSection(m.storage, name) end,
-        playerSection = function(name) return makeSection(m.storage, name) end,
+        globalSection = function(name) return settings.section(name, m, S, S.probe) end,
+        playerSection = function(name) return settings.section(name, m, S, S.probe) end,
         allPlayerSections = function() return m.storage end,
+        LIFE_TIME = { Persistent = 0, GameSession = 1, Temporary = 2 },
     })
 
     local calendar = unsupportedProxy("openmw_aux.calendar", {
@@ -362,7 +337,7 @@ local function buildModules(m, S)
         ["openmw.async"] = makeAsync(S),
         ["openmw.storage"] = storage,
         ["openmw.vfs"] = vfs,
-        ["openmw.interfaces"] = RT.interfaces,
+        ["openmw.interfaces"] = RT.makeInterfaces(m, S),
         ["openmw_aux.calendar"] = calendar,
         ["openmw_aux.util"] = auxUtil,
         ["openmw_aux.time"] = unsupportedProxy("openmw_aux.time", {
@@ -439,43 +414,50 @@ function RT.createRecord(m, draft)
 end
 
 ---------------------------------------------------------------- interfaces
+-- handler entries remember their owning script so a hot reload can drop them
 local activation = { typeHandlers = {}, objectHandlers = {} }
 local function resetInterfaces()
     activation.typeHandlers, activation.objectHandlers = {}, {}
 end
-local Activation = {
-    version = 0,
-    addHandlerForType = function(T, fn)
-        local l = activation.typeHandlers[T] or {}
-        l[#l + 1] = fn
-        activation.typeHandlers[T] = l
-    end,
-    addHandlerForObject = function(obj, fn)
-        local l = activation.objectHandlers[obj.id] or {}
-        l[#l + 1] = fn
-        activation.objectHandlers[obj.id] = l
-    end,
-}
-local Settings = {
-    version = 1,
-    registerPage = function() end,
-    registerRenderer = function() end,
-    registerGroup = function(g)
-        local d = RT.settingDefaults[g.key] or {}
-        for _, s in ipairs(g.settings or {}) do d[s.key] = s.default end
-        RT.settingDefaults[g.key] = d
-    end,
-    updateRendererArgument = function() end,
-}
+local function dropHandlersOf(pred)
+    for _, tbl in pairs({ activation.typeHandlers, activation.objectHandlers }) do
+        for k, list in pairs(tbl) do
+            local keep = {}
+            for _, h in ipairs(list) do if not pred(h.owner) then keep[#keep + 1] = h end end
+            tbl[k] = keep
+        end
+    end
+end
 local scriptInterfaces = {}
-RT.interfaces = setmetatable({}, {
-    __index = function(_, k)
-        if k == "Activation" then return Activation end
-        if k == "Settings" then return Settings end
-        return scriptInterfaces[k]
-    end,
-    __newindex = function() error("interfaces are read-only", 2) end,
-})
+function RT.getInterface(name) return scriptInterfaces[name] end
+function RT.makeInterfaces(m, S)
+    local Activation = {
+        version = 0,
+        addHandlerForType = function(T, fn)
+            if S.probe then return end
+            local l = activation.typeHandlers[T] or {}
+            l[#l + 1] = { fn = fn, owner = S }
+            activation.typeHandlers[T] = l
+        end,
+        addHandlerForObject = function(obj, fn)
+            if S.probe then return end
+            local l = activation.objectHandlers[obj.id] or {}
+            l[#l + 1] = { fn = fn, owner = S }
+            activation.objectHandlers[obj.id] = l
+        end,
+    }
+    local Settings = settings.interface(m, S)
+    return setmetatable({}, {
+        __index = function(_, k)
+            if k == "Activation" then return Activation end
+            if k == "Settings" then return Settings end
+            local v = scriptInterfaces[k]
+            if v == nil and S.probe then return settings.dummy end
+            return v
+        end,
+        __newindex = function() error("interfaces are read-only", 2) end,
+    })
+end
 
 ---------------------------------------------------------------- script host
 local SAFE_GLOBALS = {
@@ -495,11 +477,23 @@ local function makeEnv(m, S)
         mwse.log("[%s] %s", m.name, table.concat(p, "\t"))
     end
     env._G = env
+    -- omw2mwse hard-code conversions call omwcompat.cfg(key, original value)
+    local cfgSection
+    env.omwcompat = {
+        cfg = function(key, default)
+            if not m.cfgGroup then return default end
+            cfgSection = cfgSection or settings.section(m.cfgGroup, m, nil, true)
+            local v = cfgSection:get(key)
+            if v == nil or type(v) ~= type(default) then return default end
+            return v
+        end,
+    }
     local cache = {}
     env.require = function(name)
         if cache[name] ~= nil then return cache[name] end
         local mod = S.modules[name]
         if mod == nil and (name:find("^openmw%.") or name:find("^openmw_aux%.")) then
+            if S.probe then return settings.dummy end
             error("omwcompat: module '" .. name .. "' is not supported", 2)
         end
         if mod == nil then
@@ -516,12 +510,31 @@ local function makeEnv(m, S)
     return env
 end
 
-local function instantiate(m, spec)
-    local S = { path = spec.path, flags = spec.flags, callbacks = {}, mod = m }
+local function instantiate(m, spec, probe)
+    local S = { path = spec.path, flags = spec.flags, callbacks = {}, mod = m, probe = probe }
     S.modules = buildModules(m, S)
+    if probe then
+        -- settings probe: only storage / interfaces(Settings) / l10n / util are real
+        local real = { ["openmw.storage"] = true, ["openmw.interfaces"] = true, ["openmw.util"] = true }
+        for k, v in pairs(S.modules) do
+            if k == "openmw.core" then
+                -- a high revision: probes must not stop at "requires OpenMW 0.49+" guards
+                S.modules[k] = setmetatable({ l10n = v.l10n, API_REVISION = RT.PROBE_API_REVISION }, { __index = function() return settings.dummy end })
+            elseif k == "openmw.async" then
+                S.modules[k] = setmetatable({ callback = function(_, fn) return fn end }, { __index = function() return function() return settings.dummy end end })
+            elseif not real[k] then
+                S.modules[k] = settings.dummy
+            end
+        end
+    end
     local f, err = loadfile(m.root .. spec.path)
     if not f then reportError("load " .. spec.path, err); return nil end
     setfenv(f, makeEnv(m, S))
+    if probe then
+        local ok, err = pcall(f)
+        if not ok then RT.warn("settings probe of %s stopped early: %s", spec.path, tostring(err)) end
+        return nil
+    end
     local ok, ret = safecall("run " .. spec.path, f)
     if not ok then return nil end
     if type(ret) ~= "table" then ret = {} end
@@ -592,6 +605,7 @@ function RT.onLoaded(e)
     state.activation = nil
     objects.reset(); objects.resetCells(); objects.resetRecordCaches()
     resetInterfaces(); scriptInterfaces = {}
+    settings.reset()
     local pdata = tes3.player and tes3.player.data or {}
     local rtp = nil
     if pdata[RT_KEY] then
@@ -709,7 +723,7 @@ function RT.onActivate(e)
     local function run(list, where)
         if not list then return end
         for i = #list, 1, -1 do
-            local ok, r = safecall(where, list[i], target, actor)
+            local ok, r = safecall(where, list[i].fn, target, actor)
             if ok and r == false then blocked = true; return true end
         end
     end
@@ -749,6 +763,71 @@ function RT.onEnterFrame(e)
     callAll("onUpdate", dt)
 end
 
+---------------------------------------------------------------- hot reload (settings)
+-- Re-instantiate one mod's scripts in place: onSave -> rerun chunk -> onLoad(data).
+-- Used when an MCM change touches a converted constant that is read at load time.
+function RT.reloadMod(m)
+    if not state.ready then return false end
+    local saved = {}
+    for _, S in ipairs(m.scripts) do
+        local h = S.engineHandlers.onSave
+        if h then local ok, r = safecall(S.path .. " onSave", h); if ok then saved[S.path] = r end end
+    end
+    local old = {}
+    for _, S in ipairs(m.scripts) do old[S] = true end
+    local keep = {}
+    for _, t in ipairs(timers) do
+        if not old[t.script] then keep[#keep + 1] = t elseif t.name then t.rebind = t.script.path; keep[#keep + 1] = t end
+    end
+    timers = keep
+    dropHandlersOf(function(owner) return old[owner] end)
+    settings.dropSubscribers(function(owner) return old[owner] end)
+    m.scripts = {}
+    for _, spec in ipairs(m.spec.scripts) do
+        local isGlobal = false
+        for _, f in ipairs(spec.flags or {}) do if f == "GLOBAL" then isGlobal = true end end
+        if isGlobal then
+            local S = instantiate(m, spec)
+            if S then m.scripts[#m.scripts + 1] = S end
+        end
+    end
+    for _, S in ipairs(m.scripts) do
+        if S.engineHandlers.onLoad then safecall(S.path .. " onLoad", S.engineHandlers.onLoad, saved[S.path], nil) end
+        for _, t in ipairs(timers) do if t.rebind == S.path then t.script = S; t.rebind = nil end end
+    end
+    for _, cell in ipairs(tes3.getActiveCells() or {}) do
+        for ref in cell:iterateReferences() do
+            if not ref.deleted and not ref.disabled and not objects.isTomb(ref) then
+                local w = objects.wrap(ref)
+                for _, S in ipairs(m.scripts) do
+                    local h = S.engineHandlers.onObjectActive
+                    if h then RT.defer(function() if w:isValid() then safecall(S.path .. " onObjectActive", h, w) end end) end
+                end
+            end
+        end
+    end
+    mwse.log("[omwcompat] %s reloaded to apply changed settings", m.name)
+    return true
+end
+
+---------------------------------------------------------------- settings / MCM
+local function probeSettings(m)
+    for _, spec in ipairs(m.spec.scripts) do instantiate(m, spec, true) end
+end
+RT.probeSettings = probeSettings
+function RT.onModConfigReady()
+    RT.mcm = RT.mcm or {}
+    for _, m in ipairs(mods) do
+        if m.spec.probeSettings then probeSettings(m) end
+        local ok, summary = pcall(settings.buildMCM, m, { pageNote = m.cfgNote })
+        if ok then
+            RT.mcm[m.name] = summary
+        else
+            reportError(m.name .. " MCM", summary)
+        end
+    end
+end
+
 ---------------------------------------------------------------- registration
 local wired = false
 local function wire()
@@ -760,27 +839,61 @@ local function wire()
     event.register(tes3.event.enterFrame, RT.onEnterFrame)
     event.register(tes3.event.activate, RT.onActivate, { priority = 10 })
     event.register(tes3.event.referenceActivated, function(e) RT.queueActive(e.reference) end)
+    event.register(tes3.event.modConfigReady, RT.onModConfigReady)
 end
 
 -- spec = { mod = "Name", root = "Data Files/MWSE/omw/Name/", scripts = {{flags={"GLOBAL"}, path="scripts/x.lua"}},
---          meshmap = { ["long/path.nif"] = "omwc/x/abcdef12.nif" }, debug = false }
+--          meshmap = { ["long/path.nif"] = "omwc/x/abcdef12.nif" }, debug = false,
+--          probeSettings = true,      -- collect I.Settings declarations for the MCM at modConfigReady
+--          settings = {               -- omw2mwse hard-code conversions (sidecar)
+--              group = "omw2mwse_Name", page = { key=, name=, description= },
+--              settings = { { key=, name=, description=, renderer=, default=, min=, max=, integer=, apply="live"|"reload" } } } }
 function RT.register(spec)
     assert(type(spec) == "table" and spec.mod and spec.root and spec.scripts, "omwcompat.register: bad spec")
     local root = spec.root:gsub("\\", "/")
     if root:sub(-1) ~= "/" then root = root .. "/" end
-    local m = { name = spec.mod, root = root, spec = spec, scripts = {}, storage = {}, meshmap = {} }
+    local m = { name = spec.mod, title = spec.title, root = root, spec = spec, scripts = {}, storage = {}, meshmap = {} }
     for k, v in pairs(spec.meshmap or {}) do
         local nk = normMesh(k)
         m.meshmap[nk] = v
         state.meshmap[nk] = v
     end
     if spec.debug then RT.debug = true end
+    if spec.settings then
+        local cs = spec.settings
+        m.cfgGroup = cs.group or ("omw2mwse_" .. m.name)
+        local pageKey = (cs.page and cs.page.key) or m.cfgGroup
+        settings.registerPage(m, { key = pageKey, name = cs.page and cs.page.name or m.name,
+            description = cs.page and cs.page.description })
+        local reloadKeys, list = {}, {}
+        for _, s in ipairs(cs.settings or {}) do
+            local note = s.apply == "reload" and "Applies when a save is loaded or when this menu is closed in game."
+                or "Applies immediately."
+            list[#list + 1] = { key = s.key, name = s.name, description = s.description, renderer = s.renderer,
+                default = s.default, min = s.min, max = s.max, integer = s.integer, argument = s.argument, mcmNote = note }
+            if s.apply == "reload" then reloadKeys[s.key] = true end
+        end
+        settings.registerGroup(m, { key = m.cfgGroup, page = pageKey, name = cs.groupName or "Tunables", settings = list,
+            permanentStorage = true, order = -1 })
+        m.cfgNote = cs.note
+        m.reloadPending = false
+        m.onSettingChanged = function(groupKey, key)
+            if groupKey == m.cfgGroup and reloadKeys[key] then m.reloadPending = true end
+        end
+        m.onSettingsClosed = function()
+            if m.reloadPending and state.ready then
+                m.reloadPending = false
+                RT.reloadMod(m)
+            end
+        end
+    end
     mods[#mods + 1] = m
     wire()
     mwse.log("[omwcompat %s] registered %s (%d script(s))", RT.VERSION, m.name, #spec.scripts)
     return m
 end
 
+RT.settings = settings
 RT.objects = objects
 RT.util = util
 RT.serial = serial
