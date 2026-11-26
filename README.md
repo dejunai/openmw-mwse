@@ -12,8 +12,10 @@ It has two parts (see [DESIGN.md](DESIGN.md) for the reasoning):
   GLOBAL scripts with OpenMW's engine handlers and save/load semantics.
 - **omw2mwse** (`tools/omw2mwse`, Python 3.13+, stdlib only) is the CLI.
   - `scan` reports which OpenMW APIs a mod uses and whether omwcompat supports each one.
-  - `package` builds an MWSE mod folder. The original Lua is copied byte-for-byte. A
-    generated `main.lua` loader is added, and mesh paths over 31 characters get short aliases.
+  - `package` builds an MWSE mod folder. The complete original OpenMW package is always
+    placed at `Off/<Mod>/OpenMW/<original paths>`. Hosted Lua is copied byte-for-byte
+    (unless hard-code conversion rewrites it). A generated `main.lua` loader is added,
+    and mesh paths over 31 characters get short aliases.
 
 The first target is **Leave The Lights Off** by OwnlyMe (Nexus 57510). Its original
 `LTLO_g.lua` runs unmodified on MWSE through omwcompat.
@@ -30,11 +32,14 @@ python3 -m unittest discover -s tests/py     # CLI unit tests
 The output of `package` mirrors `Data Files`:
 
 ```
+Data Files/Off/<Mod>/OpenMW/...              complete original OpenMW package (author paths)
 Data Files/MWSE/mods/<Mod>/main.lua          generated loader (register with omwcompat)
-Data Files/MWSE/omw/<Mod>/...                original .omwscripts + Lua, untouched
+Data Files/MWSE/omw/<Mod>/...                hosted .omwscripts + Lua
 Data Files/MWSE/lib/omwcompat.lua, omwcompat/ the runtime (unless --no-runtime)
+Data Files/meshes/, textures/, ...           original game assets (also under Off/)
+Data Files/meshes/omwc/<slug>/<hash>.nif     short aliases for long mesh paths
 Data Files/<Mod>-metadata.toml               MWSE metadata
-MESH-ALIASES.txt                             long mesh path -> meshes/omwc/<slug>/<hash>.nif
+MESH-ALIASES.txt                             long mesh path -> short alias
 OMW2MWSE-REPORT.md                           scan + file list with hashes
 ```
 

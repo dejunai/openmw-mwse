@@ -2,21 +2,29 @@
 
 The staged folder is a Data Files root (e.g. a Vortex staging mod folder). Every
 OpenMW mod inside it (a folder holding a .omwscripts file, outside MWSE/) is built
-into MWSE files in the same folder. The OpenMW source files are never modified.
-Running it again with the same inputs changes nothing (idempotent): ownership is
-tracked in MWSE/omw/<Mod>/omw2mwse-manifest.json.
+into MWSE files in the same folder. The complete original OpenMW package is always
+moved (or copied, when --source is outside the staged folder) to
+Off/<plugin>/OpenMW/<the author's relative paths> — for example
+Off/LeaveTheLightsOff/OpenMW/scripts/LeaveTheLightsOff/LTLO_g.lua. File contents
+are never edited; only the location of the original tree changes (legacy layouts
+such as Off/OpenMW/<plugin>/ are relocated on the first successful run). Game
+assets (meshes, textures, ...) are also installed at the Data Files root so
+Morrowind can load them. Running it again with the same inputs changes nothing
+(idempotent): ownership is tracked in MWSE/omw/<Mod>/omw2mwse-manifest.json.
 MIT, Copyright (c) 2026 dej (dejunai).
 """
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 
 from . import __version__
 from . import sidecar as SC
 from . import warn
-from .build import MANIFEST_NAME, BuildError, Writer, build, notice_text, sha256b, text_bytes
+from .build import (MANIFEST_NAME, BuildError, Writer, build, is_game_asset, iter_original_files,
+                    notice_text, original_off_prefix, sha256b, text_bytes)
 from .scan import load_manifest
 
 MODES = ("normal", "hardcode")
@@ -33,6 +41,95 @@ def find_sources(root: Path) -> list[Path]:
         if om.parent not in found:
             found.append(om.parent)
     return found
+
+
+def canonical_source(staged: Path, name: str) -> Path:
+    """Off/<plugin>/OpenMW — the permanent home of the original OpenMW package."""
+    return Path(staged) / "Off" / name / "OpenMW"
+
+
+def prefer_source(srcs: list[Path], staged: Path, name: str) -> Path:
+    """Prefer a copy already at Off/<name>/OpenMW when several identical trees exist."""
+    canon = canonical_source(staged, name).resolve()
+    for s in srcs:
+        if s.resolve() == canon:
+            return s
+    return srcs[0]
+
+
+def _prune_empty_dirs(start: Path, stop: Path) -> None:
+    """Remove empty directories under start, then start itself, up to (not including) stop."""
+    try:
+        stop = stop.resolve()
+    except OSError:
+        return
+    if start.exists():
+        for dirpath, dirnames, filenames in os.walk(start, topdown=False):
+            p = Path(dirpath)
+            try:
+                if p.resolve() == stop:
+                    continue
+                next(p.iterdir())
+            except StopIteration:
+                try:
+                    p.rmdir()
+                except OSError:
+                    pass
+            except OSError:
+                pass
+    try:
+        cur = start.resolve() if start.exists() else start.parent.resolve()
+    except OSError:
+        return
+    while cur != stop and stop in cur.parents:
+        try:
+            next(cur.iterdir())
+            break
+        except StopIteration:
+            parent = cur.parent
+            try:
+                cur.rmdir()
+            except OSError:
+                break
+            cur = parent
+        except OSError:
+            break
+
+
+def relocate_original(src: Path, staged: Path, name: str) -> list[str]:
+    """After Off/<name>/OpenMW/ has been written, remove the previous package location.
+
+    Game assets already at the staged Data Files root (meshes/, textures/, ...) stay
+    there so Morrowind can load them. An external --source is never deleted.
+    """
+    dest = canonical_source(staged, name)
+    try:
+        src_r, staged_r, dest_r = src.resolve(), staged.resolve(), dest.resolve()
+    except OSError:
+        return []
+    if src_r == dest_r:
+        return []
+    if staged_r not in src_r.parents and src_r != staged_r:
+        return []
+    removed: list[str] = []
+    src_is_root = src_r == staged_r
+    for p, rel in iter_original_files(src):
+        new = dest / rel
+        if not p.is_file() or not new.is_file():
+            continue
+        try:
+            if p.resolve() == new.resolve():
+                continue
+        except OSError:
+            continue
+        if src_is_root and is_game_asset(rel):
+            continue
+        if sha256b(p.read_bytes()) != sha256b(new.read_bytes()):
+            continue
+        p.unlink()
+        removed.append(rel)
+    _prune_empty_dirs(src, staged)
+    return removed
 
 
 def mod_name_for(src: Path) -> str:
@@ -67,17 +164,20 @@ def convert(staged: Path, mode: str = "normal", *, name: str | None = None, sour
     if not sources:
         result["alerts"].append({"level": "info", "code": "no-openmw-scripts", "message": "no .omwscripts found; nothing to convert"})
         return result
-    # identical copies of one mod (e.g. OpenMW/X and Off/OpenMW/X) collapse to the first
+    # identical copies of one mod (e.g. Off/OpenMW/X and Off/X/OpenMW) collapse;
+    # the canonical Off/<name>/OpenMW copy is preferred when it is one of them
     groups: dict[str, list[Path]] = {}
     for s in sources:
         groups.setdefault(name or mod_name_for(s), []).append(s)
     for modname, srcs in groups.items():
-        src = srcs[0]
+        src = prefer_source(srcs, staged, modname)
         sigs = {_tree_sig(s) for s in srcs}
         if len(sigs) > 1:
             raise BuildError(f"{modname}: {len(srcs)} different source folders ({', '.join(str(s.relative_to(staged)) for s in srcs)}); "
                              "pick one with --source")
-        for dup in srcs[1:]:
+        for dup in srcs:
+            if dup.resolve() == src.resolve():
+                continue
             result["alerts"].append({"level": "info", "code": "duplicate-source",
                                      "message": f"{dup.relative_to(staged)} is identical to {src.relative_to(staged)}; used the latter"})
         man_rel = f"MWSE/omw/{modname}/{MANIFEST_NAME}"
@@ -120,6 +220,7 @@ def convert(staged: Path, mode: str = "normal", *, name: str | None = None, sour
         w.check()
         ok, total = res.scan.coverage()
         so, st = res.scan.settings_coverage()
+        entry["off"] = original_off_prefix(modname).rstrip("/")
         entry.update({
             "status": "ok", "verdict": res.scan.verdict, "coverage": [ok, total],
             "settings": {"groups": [g["key"] for g in res.scan.settings.get("groups", [])], "coverage": [so, st],
@@ -141,17 +242,30 @@ def convert(staged: Path, mode: str = "normal", *, name: str | None = None, sour
             result["exitCode"] = max(result["exitCode"], EXIT_CONFLICT)
             result["mods"].append(entry)
             continue
+        if not dry_run:
+            w.commit()
+            moved = relocate_original(src, staged, modname)
+            if moved:
+                previous_src = entry["source"]
+                entry["source"] = str(canonical_source(staged, modname).relative_to(staged))
+                entry["relocatedFrom"] = previous_src
+                entry["relocated"] = moved
+        else:
+            dest = canonical_source(staged, modname)
+            try:
+                if src.resolve() != dest.resolve() and (staged.resolve() in src.resolve().parents or src.resolve() == staged.resolve()):
+                    entry["willRelocateTo"] = str(dest.relative_to(staged))
+            except OSError:
+                pass
         files = {rel: sha256b(data) for rel, data in w.plan.items()}
         man = {"tool": "omw2mwse", "version": __version__, "mod": modname, "source": entry["source"], "mode": mode,
                "files": files}
         man_bytes = text_bytes(json.dumps(man, indent=1, sort_keys=True) + "\n")
         man_changed = not (mp.is_file() and mp.read_bytes() == man_bytes)
-        if not dry_run:
-            w.commit()
-            if man_changed:
-                mp.parent.mkdir(parents=True, exist_ok=True)
-                mp.write_bytes(man_bytes)
-        entry["changed"] = w.changed() or man_changed
+        if not dry_run and man_changed:
+            mp.parent.mkdir(parents=True, exist_ok=True)
+            mp.write_bytes(man_bytes)
+        entry["changed"] = w.changed() or man_changed or bool(entry.get("relocated"))
         result["changed"] = result["changed"] or entry["changed"]
         result["mods"].append(entry)
     return result

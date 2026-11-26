@@ -145,6 +145,10 @@ class PackageTests(unittest.TestCase):
             data = out / "Data Files"
             copied = data / "MWSE" / "omw" / "M" / "scripts" / "M" / "m.lua"
             self.assertEqual(copied.read_bytes(), (src / "scripts" / "M" / "m.lua").read_bytes())
+            off = data / "Off" / "M" / "OpenMW"
+            self.assertEqual((off / "scripts" / "M" / "m.lua").read_bytes(), (src / "scripts" / "M" / "m.lua").read_bytes())
+            self.assertEqual((off / "M.omwscripts").read_bytes(), (src / "M.omwscripts").read_bytes())
+            self.assertFalse((data / "Off" / "OpenMW").exists())
             main_lua = (data / "MWSE" / "mods" / "M" / "main.lua").read_text(encoding="utf-8")
             self.assertIn('path = "scripts/M/m.lua"', main_lua)
             self.assertIn("very/long/path/that/is/over/31/chars.nif", main_lua)
@@ -179,6 +183,27 @@ class PackageTests(unittest.TestCase):
             r = package(src, out, name="M", meshes_from=meshes)
             alias = r["aliases"][0][1]
             self.assertEqual((out / "Data Files" / "meshes" / alias).read_bytes(), b"NIF")
+
+    def test_original_package_and_game_meshes(self):
+        with tempfile.TemporaryDirectory() as t:
+            src, out = Path(t) / "src", Path(t) / "out"
+            src.mkdir()
+            _make_mod(src)
+            mesh = src / "meshes" / "light_off99.nif"
+            mesh.parent.mkdir()
+            mesh.write_bytes(b"NIFSHORT")
+            (src / "readme.txt").write_text("hi", encoding="utf-8")
+            r = package(src, out, name="M")
+            data = out / "Data Files"
+            off = data / "Off" / "M" / "OpenMW"
+            self.assertEqual((off / "meshes" / "light_off99.nif").read_bytes(), b"NIFSHORT")
+            self.assertEqual((data / "meshes" / "light_off99.nif").read_bytes(), b"NIFSHORT")
+            self.assertEqual((off / "readme.txt").read_text(encoding="utf-8"), "hi")
+            self.assertFalse((data / "readme.txt").exists())  # not a game asset; stays under Off/ only
+            # source tree is never modified by package
+            self.assertTrue((src / "meshes" / "light_off99.nif").exists())
+            self.assertFalse((data / "Off" / "OpenMW").exists())
+            self.assertTrue(any(rel.endswith("light_off99.nif") for rel in r["result"].off_copied))
 
     def test_cli(self):
         with tempfile.TemporaryDirectory() as t:

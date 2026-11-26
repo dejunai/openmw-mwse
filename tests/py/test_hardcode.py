@@ -181,6 +181,9 @@ class Convert(unittest.TestCase):
             m = r["mods"][0]
             self.assertEqual(m["name"], "Demo")
             self.assertEqual(m["rewrites"], [])
+            self.assertEqual(m["off"], "Off/Demo/OpenMW")
+            self.assertEqual(m["source"], "Off/Demo/OpenMW")
+            self.assertEqual(m["relocatedFrom"], "Off/OpenMW/Demo")
             cands = [a for a in m["alerts"] if a["code"] == "hardcode-candidate"]
             self.assertIn("RADIUS", [a.get("name") for a in cands])
             self.assertIn("counter >= 30", [a.get("context") for a in cands])
@@ -188,7 +191,10 @@ class Convert(unittest.TestCase):
             self.assertEqual(out.read_text(encoding="utf-8"), LUA)  # byte-identical
             self.assertTrue((root / "MWSE" / "mods" / "Demo" / "main.lua").exists())
             self.assertTrue((root / "MWSE" / "omw" / "Demo" / "omw2mwse-manifest.json").exists())
-            self.assertEqual(tree(src), before)  # source untouched
+            canon = root / "Off" / "Demo" / "OpenMW"
+            self.assertEqual(tree(canon), before)  # complete original package, new layout
+            self.assertFalse((root / "Off" / "OpenMW" / "Demo").exists())
+            self.assertFalse((root / "Off" / "OpenMW").exists())
             notice = "Unofficial mwsuite conversion of Demo by the original author"
             self.assertIn("Report issues to mwsuite / dej (dejunai)", m["notice"])
             meta = (root / "Demo-metadata.toml").read_text(encoding="utf-8")
@@ -305,6 +311,27 @@ class Convert(unittest.TestCase):
                 convert(root, "hardcode", accept=True)
             self.assertNotEqual(p.read_bytes(), old)
             self.assertEqual(deployed.read_bytes(), old)  # the hardlinked copy is untouched
+
+    def test_canonical_off_layout_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t)
+            src = root / "Off" / "Demo" / "OpenMW"
+            (src / "scripts" / "Demo").mkdir(parents=True)
+            (src / "scripts" / "Demo" / "g.lua").write_text(LUA, encoding="utf-8")
+            (src / "Demo.omwscripts").write_text("GLOBAL: scripts/Demo/g.lua\n", encoding="utf-8")
+            (src / "meshes" / "short.nif").parent.mkdir()
+            (src / "meshes" / "short.nif").write_bytes(b"NIF")
+            before = tree(src)
+            r1 = convert(root, "normal")
+            self.assertEqual(r1["mods"][0]["source"], "Off/Demo/OpenMW")
+            self.assertNotIn("relocatedFrom", r1["mods"][0])
+            self.assertEqual(tree(src), before)
+            self.assertEqual((root / "meshes" / "short.nif").read_bytes(), b"NIF")
+            self.assertFalse((root / "Off" / "OpenMW").exists())
+            snap = tree(root)
+            r2 = convert(root, "normal")
+            self.assertFalse(r2["changed"])
+            self.assertEqual(tree(root), snap)
 
     def test_cli_tidy_flag_json(self):
         self.assertEqual(translate_tidy_flag(["--convert-omwscripts", "D", "--json"]), ["convert", "D", "--json", "--mode", "normal"])

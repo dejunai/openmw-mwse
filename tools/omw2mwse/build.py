@@ -1,13 +1,18 @@
 """Core build used by `package` (fresh output folder) and `convert` (in place).
 
 build() turns one OpenMW mod source tree into MWSE files under a Data Files root:
+  Off/<Mod>/OpenMW/<original paths>     the complete original OpenMW package, byte-identical
   MWSE/mods/<Mod>/main.lua              generated loader (omwcompat.register spec)
-  MWSE/omw/<Mod>/...                    the OpenMW Lua (+ .omwscripts, l10n)
+  MWSE/omw/<Mod>/...                    the hosted OpenMW Lua (+ .omwscripts, l10n)
   MWSE/omw/<Mod>/_original/...          verbatim copies of any Lua rewritten for hard-codes
   MWSE/lib/omwcompat(.lua)              the runtime (unless with_runtime=False)
-  meshes/omwc/<slug>/<hash>.nif         short aliases for long mesh paths (R4)
+  meshes/, textures/, ...               game-loadable assets from the original package
+  meshes/omwc/<slug>/<hash>.nif         short aliases for mesh paths longer than 31 chars (R4)
   <Mod>-metadata.toml
-Writes are two-phase (plan, then commit) so a conflict aborts before any change.
+The original package is always placed at Off/<Mod>/OpenMW/<the author's relative paths>
+(for example Off/LeaveTheLightsOff/OpenMW/scripts/LeaveTheLightsOff/LTLO_g.lua).
+Generated MWSE files are never written under Off/. Writes are two-phase (plan, then
+commit) so a conflict aborts before any change.
 MIT, Copyright (c) 2026 dej (dejunai).
 """
 from __future__ import annotations
@@ -59,6 +64,56 @@ def sha256b(b: bytes) -> str:
 
 def text_bytes(s: str) -> bytes:
     return s.replace("\r\n", "\n").encode("utf-8")  # UTF-8, no BOM, LF
+
+
+# ------------------------------------------------------------------ original package (Off/<plugin>/OpenMW/)
+GAME_ASSET_DIRS = frozenset({
+    "meshes", "textures", "icons", "sounds", "music", "fonts",
+    "splash", "video", "bookart",
+})
+GAME_PLUGIN_SUFFIXES = frozenset({".esp", ".esm", ".bsa", ".omwaddon", ".omwgame"})
+OFF_SKIP_DIRS = frozenset({".git", "__pycache__", ".omw2mwse-output"})
+OFF_SKIP_FILES = frozenset({
+    "_SOURCE.txt", "OMW2MWSE-REPORT.md", MANIFEST_NAME, ".omw2mwse-output",
+})
+
+
+def original_off_prefix(name: str, data_prefix: str = "") -> str:
+    """Canonical location of the preserved original OpenMW package inside a Data Files root."""
+    d = (data_prefix.rstrip("/") + "/") if data_prefix else ""
+    return f"{d}Off/{name}/OpenMW/"
+
+
+def is_game_asset(rel: str) -> bool:
+    """True if this original-package relative path is also installed at the Data Files root."""
+    rel = rel.replace("\\", "/")
+    top = rel.split("/", 1)[0].lower()
+    if top in GAME_ASSET_DIRS:
+        return True
+    if "/" not in rel and Path(rel).suffix.lower() in GAME_PLUGIN_SUFFIXES:
+        return True
+    return False
+
+
+def iter_original_files(src: Path):
+    """Yield (path, posix-rel) for every file that belongs to the original OpenMW package."""
+    src = Path(src)
+    for p in sorted(src.rglob("*")):
+        if not p.is_file():
+            continue
+        rel = p.relative_to(src).as_posix()
+        parts = p.relative_to(src).parts
+        if any(x in OFF_SKIP_DIRS or x.lower() == "__pycache__" for x in parts):
+            continue
+        if p.name in OFF_SKIP_FILES or p.name.endswith(".pyc"):
+            continue
+        if p.name.startswith(".omw2mwse-"):
+            continue
+        if parts and parts[0].lower() == "mwse":
+            continue
+        if p.name.endswith(".omw2mwse.toml"):
+            continue
+        yield p, rel
 
 
 # ------------------------------------------------------------------ writer
@@ -442,6 +497,8 @@ class BuildResult:
     report_md: str = ""
     alerts: list = field(default_factory=list)
     credits: dict = field(default_factory=dict)
+    off_rel: str = ""
+    off_copied: list = field(default_factory=list)  # original-package relative paths
 
 
 def build(src: Path, writer: Writer, name: str, *, data_prefix: str = "", slug: str | None = None,
@@ -461,7 +518,16 @@ def build(src: Path, writer: Writer, name: str, *, data_prefix: str = "", slug: 
     slug = slug or default_slug(name)
     D = (data_prefix.rstrip("/") + "/") if data_prefix else ""
     omw = f"{D}MWSE/omw/{name}/"
-    res = BuildResult(name=name, slug=slug, source=str(src), scan=scan, writer=writer, omw_rel=omw)
+    off = original_off_prefix(name, data_prefix)
+    res = BuildResult(name=name, slug=slug, source=str(src), scan=scan, writer=writer, omw_rel=omw, off_rel=off)
+
+    # 0. Complete original OpenMW package at Off/<plugin>/OpenMW/<original paths>
+    for p, rel in iter_original_files(src):
+        data = p.read_bytes()
+        writer.put(off + rel, data)
+        res.off_copied.append(rel)
+        if is_game_asset(rel):
+            writer.put(D + rel, data)
 
     # 1. Lua placement
     declared = {s.path.lower(): s.path for s in scan.scripts}
@@ -597,7 +663,7 @@ def build(src: Path, writer: Writer, name: str, *, data_prefix: str = "", slug: 
 
 def render_report(res: BuildResult, mode: str) -> str:
     rep = [f"# omw2mwse report: {res.name}", "", notice_text(res.credits or {"title": res.name}), "",
-           f"- Source: `{res.source}` (never modified)",
+           f"- Original package: `{res.off_rel}` (complete, byte-identical, author's relative paths)",
            f"- omw2mwse {__version__}, mode `{mode}`",
            f"- Scan verdict: **{res.scan.verdict}**",
            f"- Mesh aliases: {len(res.aliases)}", ""]
@@ -618,6 +684,14 @@ def render_report(res: BuildResult, mode: str) -> str:
         rep += ["", "## Hard-code decisions", ""] + [f"- {x}" for x in res.hard.log]
     if res.notes:
         rep += ["", "## Notes", ""] + [f"- {n}" for n in res.notes]
+    if res.off_copied:
+        rep += ["", f"## Original OpenMW package (`{res.off_rel}`)", "",
+                "The complete original package is preserved here with the author's relative paths. "
+                "Contents are byte-identical to the source. Game-loadable assets (meshes, textures, "
+                "and so on) are also installed at the Data Files root so Morrowind can find them.", ""]
+        for rel in res.off_copied:
+            extra = " (also at the Data Files root)" if is_game_asset(rel) else ""
+            rep.append(f"- `{res.off_rel}{rel}`{extra}")
     rep += ["", "## Files", ""]
     for r, t, rewritten in res.copied:
         if rewritten:

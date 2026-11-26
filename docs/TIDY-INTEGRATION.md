@@ -15,23 +15,46 @@ returns the same dict that `--json` prints. Python 3.11+ stdlib only (tomllib); 
 written for 3.15.
 
 `<staged-mod-dir>` is a Data Files root (a Vortex staging mod folder). omw2mwse finds every
-folder below it that holds a `.omwscripts` file, outside `MWSE/` (for example
-`Off/OpenMW/LeaveTheLightsOff/`), and writes the MWSE build into the same folder:
+folder below it that holds a `.omwscripts` file, outside `MWSE/` (for example a legacy
+`Off/OpenMW/LeaveTheLightsOff/` or a loose package at the folder root), and writes the
+MWSE build into the same folder. `package` uses the same layout under `OUT/Data Files/`.
 
-| Output (relative to the staged folder) | What |
+The complete original OpenMW package is **always** placed at
+`Off/<plugin>/OpenMW/<the author's relative paths>`. Example:
+
+- `Off/LeaveTheLightsOff/OpenMW/scripts/LeaveTheLightsOff/LTLO_g.lua`
+- `Off/LeaveTheLightsOff/OpenMW/LeaveTheLightsOff.omwscripts`
+- `Off/LeaveTheLightsOff/OpenMW/meshes/...` (and any other original files, same relative paths)
+
+`package` copies the source tree there and never modifies the source. `convert` *moves*
+an original package that is already inside the staged folder (including the legacy
+`Off/OpenMW/<plugin>/` layout) to that canonical location; file contents stay
+byte-identical. An external `--source` is copied, not deleted. If the package is
+already at `Off/<plugin>/OpenMW/`, nothing is relocated. A second run is a no-op.
+
+Game-loadable assets from the original package (`meshes/`, `textures/`, `icons/`,
+`sounds/`, `music/`, `fonts/`, `splash/`, `video/`, `bookart/`, and loose
+`.esp`/`.esm`/`.bsa`/`.omwaddon`/`.omwgame`) are also installed at the Data Files
+root so Morrowind / MWSE can load them. Hosted (possibly rewritten) Lua stays in
+`MWSE/omw/<Mod>/`. Generated files (the loader, aliases, runtime, metadata, reports)
+are never written under `Off/`.
+
+| Output (relative to the staged folder, or to `OUT/Data Files/` for `package`) | What |
 |---|---|
+| `Off/<Mod>/OpenMW/<original paths>` | complete original OpenMW package, byte-identical, author's relative paths |
 | `MWSE/mods/<Mod>/main.lua` | generated loader |
-| `MWSE/omw/<Mod>/...` | the OpenMW Lua, `.omwscripts`, `l10n/` |
+| `MWSE/omw/<Mod>/...` | the hosted OpenMW Lua, `.omwscripts`, `l10n/` |
 | `MWSE/omw/<Mod>/_original/...` | verbatim originals of files rewritten for hard-coded values |
 | `MWSE/omw/<Mod>/README-mwsuite.md` | notice: unofficial mwsuite conversion, support goes to mwsuite / dej (dejunai), credits |
 | `MWSE/omw/<Mod>/OMW2MWSE-REPORT.md` | human-readable report |
 | `MWSE/omw/<Mod>/omw2mwse-manifest.json` | files omw2mwse owns, with SHA-256 (used for idempotency) |
 | `MWSE/lib/omwcompat.lua`, `MWSE/lib/omwcompat/` | runtime (skip with `--no-runtime`) |
+| `meshes/`, `textures/`, ... | original game assets, also kept under `Off/<Mod>/OpenMW/` |
 | `meshes/omwc/<slug>/<hash>.nif` | short aliases for mesh paths longer than 31 chars, copied from `meshes/` in the folder |
 | `<Mod>-metadata.toml` | MWSE metadata with the notice in its description |
 
-The OpenMW source files are never changed. Nothing outside `<staged-mod-dir>` is written:
-**never point it at the live game's Data Files**; Vortex deploys the result.
+Nothing outside `<staged-mod-dir>` (or the `package` output folder) is written:
+**never point convert at the live game's Data Files**; Vortex deploys the result.
 
 ## Modes
 
@@ -81,7 +104,9 @@ omw2mwse outputs, such as `MWSE/mods/LTLOHandportMigration/`, are never deleted.
  "tool": "omw2mwse", "version": "0.2.0", "command": "convert", "mode": "normal",
  "dir": "...", "dryRun": false, "changed": true, "exitCode": 0, "alerts": [],
  "mods": [{
-   "name": "LeaveTheLightsOff", "source": "Off/OpenMW/LeaveTheLightsOff",
+   "name": "LeaveTheLightsOff", "source": "Off/LeaveTheLightsOff/OpenMW",
+   "off": "Off/LeaveTheLightsOff/OpenMW",
+   "relocatedFrom": "Off/OpenMW/LeaveTheLightsOff",
    "status": "ok", "verdict": "ready", "coverage": [46, 46],
    "settings": {"groups": [], "coverage": [0, 0], "mcm": false},
    "rewrites": [], "hardcodeLog": [], "conflicts": [],
@@ -102,6 +127,9 @@ omw2mwse outputs, such as `MWSE/mods/LTLOHandportMigration/`, are never deleted.
 `status` is `ok`, `conflict` or `refused`. Alert codes: `hardcode-candidate`, `blocker`
 (the mod will not run fully), `scan-warning`, `settings-renderer-fallback`, `mesh-missing`,
 `duplicate-source`, `sidecar-ignored`, `hardcode-none`, `no-openmw-scripts`.
+On a first run that relocates a legacy `Off/OpenMW/<Mod>/` (or other in-folder) package,
+`source` is the canonical `Off/<Mod>/OpenMW` path and `relocatedFrom` names the previous
+location. A `--dry-run` reports `willRelocateTo` instead and writes nothing.
 `newGameRequired` is always `false` from omw2mwse: settings live in
 `MWSE/config/omwcompat_<Mod>.json`, not in the save. Switching an existing save from some
 other implementation of the same mod (such as Dej's LTLO hand port) is a separate matter; omw2mwse
