@@ -143,19 +143,22 @@ class PackageTests(unittest.TestCase):
             after = {p: hashlib.sha256(p.read_bytes()).hexdigest() for p in src.rglob("*") if p.is_file()}
             self.assertEqual(before, after)
             data = out / "Data Files"
-            copied = data / "MWSE" / "omw" / "M" / "scripts" / "M" / "m.lua"
+            copied = data / "MWSE" / "mods" / "mwsuite" / "openmw" / "M" / "omw" / "scripts" / "M" / "m.lua"
             self.assertEqual(copied.read_bytes(), (src / "scripts" / "M" / "m.lua").read_bytes())
             off = data / "Off" / "M" / "OpenMW"
             self.assertEqual((off / "scripts" / "M" / "m.lua").read_bytes(), (src / "scripts" / "M" / "m.lua").read_bytes())
             self.assertEqual((off / "M.omwscripts").read_bytes(), (src / "M.omwscripts").read_bytes())
             self.assertFalse((data / "Off" / "OpenMW").exists())
-            main_lua = (data / "MWSE" / "mods" / "M" / "main.lua").read_text(encoding="utf-8")
+            main_lua = (data / "MWSE" / "mods" / "mwsuite" / "openmw" / "M" / "main.lua").read_text(encoding="utf-8")
             self.assertIn('path = "scripts/M/m.lua"', main_lua)
+            self.assertIn('root = "Data Files/MWSE/mods/mwsuite/openmw/M/omw/"', main_lua)
+            self.assertFalse((data / "MWSE" / "mods" / "M").exists())
+            self.assertFalse((data / "MWSE" / "omw").exists())
             self.assertIn("very/long/path/that/is/over/31/chars.nif", main_lua)
             self.assertTrue((data / "MWSE" / "lib" / "omwcompat.lua").exists())
             self.assertTrue((data / "MWSE" / "lib" / "omwcompat" / "runtime.lua").exists())
-            self.assertTrue((data / "M-metadata.toml").read_text(encoding="utf-8").find('lua-mod = "M"') >= 0)
-            raw = (data / "MWSE" / "mods" / "M" / "main.lua").read_bytes()
+            self.assertTrue((data / "M-metadata.toml").read_text(encoding="utf-8").find('lua-mod = "mwsuite.openmw.M"') >= 0)
+            raw = (data / "MWSE" / "mods" / "mwsuite" / "openmw" / "M" / "main.lua").read_bytes()
             self.assertFalse(raw.startswith(b"\xef\xbb\xbf"))
             self.assertNotIn(b"\r\n", raw)
             self.assertEqual(len(r["aliases"]), 1)

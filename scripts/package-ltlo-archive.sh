@@ -13,12 +13,12 @@
 # Usage:
 #   MESH_SRC=/path/to/meshes scripts/package-ltlo-archive.sh
 # Output:
-#   dist-archives/mwsuite - OpenMW - Leave The Lights Off 0.2.0.7z
+#   dist-archives/mwsuite - OpenMW - Leave The Lights Off 0.2.1.7z
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MESH_SRC="${MESH_SRC:-$ROOT/../ltlo-off99-meshes}"
 WORK="$ROOT/build-ltlo-archive"
-OUT_NAME="mwsuite - OpenMW - Leave The Lights Off 0.2.0"
+OUT_NAME="mwsuite - OpenMW - Leave The Lights Off 0.2.1"
 ARCHIVE_DIR="$ROOT/dist-archives"
 ARCHIVE="$ARCHIVE_DIR/$OUT_NAME.7z"
 

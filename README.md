@@ -33,8 +33,8 @@ The output of `package` mirrors `Data Files`:
 
 ```
 Data Files/Off/<Mod>/OpenMW/...              complete original OpenMW package (author paths)
-Data Files/MWSE/mods/<Mod>/main.lua          generated loader (register with omwcompat)
-Data Files/MWSE/omw/<Mod>/...                hosted .omwscripts + Lua
+Data Files/MWSE/mods/mwsuite/openmw/<Mod>/main.lua   generated loader (register with omwcompat)
+Data Files/MWSE/mods/mwsuite/openmw/<Mod>/omw/...    hosted .omwscripts + Lua
 Data Files/MWSE/lib/omwcompat.lua, omwcompat/ the runtime (unless --no-runtime)
 Data Files/meshes/, textures/, ...           original game assets (also under Off/)
 Data Files/meshes/omwc/<slug>/<hash>.nif     short aliases for long mesh paths
@@ -58,7 +58,7 @@ are personal test material and are not redistributed here.
 ## 0.2: settings, MCMs, hard-coded values, tidy entry point
 
 - OpenMW settings (`I.Settings`, `openmw.storage`) become an MWSE MCM named
-  `mwsuite - OpenMW: <title>`. See docs/RUNTIME.md.
+  one shared "MW Conversions" entry (tab 1 disclaimer, one tab per converted mod). See docs/RUNTIME.md.
 - `omw2mwse convert <staged-mod-dir> --mode normal|hardcode --json` (or
   `--convert-omwscripts[=MODE]`) converts in place and is idempotent. See
   docs/TIDY-INTEGRATION.md.

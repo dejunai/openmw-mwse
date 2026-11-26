@@ -332,48 +332,43 @@ local function addSetting(container, g, s, L)
     return "info:custom"
 end
 
--- Build one MCM template per mod that declared groups. Returns a summary table.
-function M.buildMCM(m, opts)
-    opts = opts or {}
+-- Add one tab (a sidebar page) for mod m to the shared "MW Conversions" template. A tab is
+-- always created: it shows the original mod, its author and the support line, then the
+-- mod's settings groups (if any) as categories. Returns a summary table.
+function M.addTab(template, m, aboutLines)
     local groups = {}
     for _, k in ipairs(registry.groupOrder) do
         local g = registry.groups[k]
         if g.mod == m then groups[#groups + 1] = g end
     end
-    if #groups == 0 then return nil end
+    local about = aboutLines or {}
+    local c = m.credits or {}
+    local title = c.title or m.title or m.name
+    local page = template:createSideBarPage({ label = title, description = table.concat(about, "\n") })
+    if page.sidebar then page.sidebar:createInfo({ text = table.concat(about, "\n") }) end
+    page:createInfo({ text = table.concat(about, "\n") })
+    local summary = { title = title, groups = {} }
+    if #groups == 0 then
+        page:createInfo({ text = "This mod has no settings to configure." })
+        return summary
+    end
     local pageKeys, pagesUsed = {}, {}
     for _, g in ipairs(groups) do
         local pk = (g.page and registry.pages[g.page]) and g.page or "__default"
         if not pagesUsed[pk] then pagesUsed[pk] = {}; pageKeys[#pageKeys + 1] = pk end
         table.insert(pagesUsed[pk], g)
     end
-    local firstPage = registry.pages[pageKeys[1]]
-    local PL = firstPage and M.l10n(m, firstPage.l10n) or function(x) return x end
-    local title = m.title or (firstPage and firstPage.name and PL(firstPage.name)) or m.name
-    local template = mwse.mcm.createTemplate({ name = (opts.prefix or "") .. title })
-    template.onClose = function()
-        M.saveConfig(m.name)
-        if m.onSettingsClosed then m.onSettingsClosed() end
-    end
-    local summary = { title = (opts.prefix or "") .. title, pages = {} }
-    local firstDone = false
+    if m.cfgNote then page:createInfo({ text = m.cfgNote }) end
     for _, pk in ipairs(pageKeys) do
         local p = registry.pages[pk]
         local L = p and M.l10n(m, p.l10n) or function(x) return x end
-        local plabel = p and p.name and L(p.name) or "Settings"
-        local pdesc = p and p.description and L(p.description) or ""
-        if opts.pageNote then pdesc = (pdesc ~= "" and (pdesc .. "\n\n") or "") .. opts.pageNote end
-        if opts.notice then pdesc = opts.notice .. (pdesc ~= "" and ("\n\n" .. pdesc) or "") end
-        local page = template:createSideBarPage({ label = plabel, description = pdesc })
-        if opts.notice and not firstDone then
-            page:createInfo({ text = opts.notice })
-            firstDone = true
-        end
-        local ps = { label = plabel, groups = {} }
+        local plabel = p and p.name and L(p.name) or nil
         table.sort(pagesUsed[pk], function(a, b) if a.order ~= b.order then return a.order < b.order end return a.seq < b.seq end)
         for _, g in ipairs(pagesUsed[pk]) do
             local GL = M.l10n(m, g.l10n)
             local glabel = g.name and GL(g.name) or g.key
+            -- several OpenMW settings pages fold into this one tab: keep them apart by name
+            if #pageKeys > 1 and plabel then glabel = plabel .. ": " .. glabel end
             local cat = page:createCategory({ label = glabel, description = g.description and GL(g.description) or nil })
             local gs = { label = glabel, key = g.key, settings = {} }
             local hosted = false
@@ -390,12 +385,16 @@ function M.buildMCM(m, opts)
                 gs.settings[#gs.settings + 1] = { key = s.key, label = GL(s.name or s.key), renderer = s.renderer, control = kind,
                     default = s.default, min = s.min, max = s.max }
             end
-            ps.groups[#ps.groups + 1] = gs
+            summary.groups[#summary.groups + 1] = gs
         end
-        summary.pages[#summary.pages + 1] = ps
     end
-    template:register()
     return summary
+end
+
+-- called when the shared menu closes
+function M.closeMod(m)
+    M.saveConfig(m.name)
+    if m.onSettingsClosed then m.onSettingsClosed() end
 end
 
 ---------------------------------------------------------------- probe support

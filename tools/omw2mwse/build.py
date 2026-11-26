@@ -2,9 +2,10 @@
 
 build() turns one OpenMW mod source tree into MWSE files under a Data Files root:
   Off/<Mod>/OpenMW/<original paths>     the complete original OpenMW package, byte-identical
-  MWSE/mods/<Mod>/main.lua              generated loader (omwcompat.register spec)
-  MWSE/omw/<Mod>/...                    the hosted OpenMW Lua (+ .omwscripts, l10n)
-  MWSE/omw/<Mod>/_original/...          verbatim copies of any Lua rewritten for hard-codes
+  MWSE/mods/mwsuite/openmw/<Mod>/main.lua       generated loader (omwcompat.register spec)
+  MWSE/mods/mwsuite/openmw/<Mod>/omw/...        the hosted OpenMW Lua (+ .omwscripts, l10n)
+  MWSE/mods/mwsuite/openmw/<Mod>/omw/_original/ verbatim copies of any Lua rewritten for hard-codes
+  MWSE/mods/mwsuite/openmw/<Mod>/README-mwsuite.md, OMW2MWSE-REPORT.md, omw2mwse-manifest.json
   MWSE/lib/omwcompat(.lua)              the runtime (unless with_runtime=False)
   meshes/, textures/, ...               game-loadable assets from the original package
   meshes/omwc/<slug>/<hash>.nif         short aliases for mesh paths longer than 31 chars (R4)
@@ -352,13 +353,75 @@ def _enclosing_function(src: str, pos: int) -> str:
 
 
 # ------------------------------------------------------------------ loader / metadata
-MCM_GROUP = "mwsuite - OpenMW"
+MCM_NAME = "MW Conversions"          # the one Mod Config Menu entry; one tab per converted mod
 MAINTAINER = "mwsuite / dej (dejunai)"
+# The single support contact, shown in every tab, notice and README. Must equal
+# runtime/MWSE/lib/omwcompat/conversions.lua C.SUPPORT (tests/py checks this).
+SUPPORT_LINE = ("Unofficial conversion by mwsuite. Do not contact the original author about it. "
+                "Support: dej (dejunai) via the Nexus Mods forums.")
+SUITE_DIR = "MWSE/mods/mwsuite/openmw"   # converted mods live at SUITE_DIR/<Mod>/
 
 
-def credits_of(name: str, sidecar: dict | None, title: str | None, overrides: dict | None) -> dict:
-    c = dict((sidecar or {}).get("mod", {}))
-    c.pop("name", None)
+def mod_dir(name: str, data_prefix: str = "") -> str:
+    d = (data_prefix.rstrip("/") + "/") if data_prefix else ""
+    return f"{d}{SUITE_DIR}/{name}/"
+
+
+def lua_mod_id(name: str) -> str:
+    return "mwsuite.openmw." + name
+
+
+def hosted_name(rel: str) -> str:
+    """MWSE runs every main.lua it finds under MWSE/mods at any depth, so a hosted script that
+    is called main.lua is stored as main.lua.omw (the runtime loads either name)."""
+    return rel + ".omw" if rel.rsplit("/", 1)[-1].lower() == "main.lua" else rel
+
+
+def detect_credits(dirs) -> dict:
+    """Original mod name/author/page from package metadata next to the source:
+    fomod/info.xml (Name, Author, Website) or a <Mod>-metadata.toml ([package]). Best effort."""
+    import tomllib
+    import xml.etree.ElementTree as ET
+    found: dict = {}
+    for d in dirs:
+        d = Path(d)
+        if not d.is_dir():
+            continue
+        for x in sorted(d.glob("*")):
+            if x.is_dir() and x.name.lower() == "fomod":
+                for f in x.iterdir():
+                    if f.name.lower() == "info.xml":
+                        try:
+                            root = ET.fromstring(f.read_bytes())
+                        except ET.ParseError:
+                            continue
+                        for tag, key in (("Name", "title"), ("Author", "author"), ("Website", "url")):
+                            el = root.find(tag)
+                            if el is not None and (el.text or "").strip():
+                                found.setdefault(key, el.text.strip())
+        for f in sorted(d.glob("*metadata.toml")):
+            try:
+                data = tomllib.loads(f.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if str(data.get("tools", {}).get("mwse", {}).get("lua-mod", "")).startswith("mwsuite."):
+                continue   # our own output, not the original's metadata
+            pkg = data.get("package", {})
+            if pkg.get("name"):
+                found.setdefault("title", str(pkg["name"]))
+            authors = [str(a) for a in pkg.get("authors", []) if "mwsuite" not in str(a).lower()]
+            if authors:
+                found.setdefault("author", re.sub(r"\s*\((original mod|author)\)$", "", authors[0]))
+            if pkg.get("homepage"):
+                found.setdefault("url", str(pkg["homepage"]))
+    return found
+
+
+def credits_of(name: str, sidecar: dict | None, title: str | None, overrides: dict | None,
+               detected: dict | None = None) -> dict:
+    """Precedence: CLI options > sidecar [mod] > metadata detected next to the source > mod name."""
+    c = dict(detected or {})
+    c.update({k: v for k, v in (sidecar or {}).get("mod", {}).items() if k != "name"})
     for k, v in (overrides or {}).items():
         if v:
             c[k] = v
@@ -369,9 +432,8 @@ def credits_of(name: str, sidecar: dict | None, title: str | None, overrides: di
 
 
 def notice_text(c: dict) -> str:
-    author = c.get("author") or "the original author"
-    s = (f"Unofficial mwsuite conversion of {c['title']} by {author} (OpenMW Lua hosted on MWSE by omwcompat). "
-         f"Report issues to {MAINTAINER}, not to {author}.")
+    author = c.get("author") or "unknown"
+    s = f"Unofficial mwsuite conversion of {c['title']} (original author: {author}). {SUPPORT_LINE}"
     if c.get("license"):
         s += f" Original license: {c['license']}."
     if c.get("url"):
@@ -380,22 +442,25 @@ def notice_text(c: dict) -> str:
 
 
 def render_readme(name: str, c: dict, mode: str, accepted: list) -> str:
-    author = c.get("author") or "the original author"
+    author = c.get("author") or "unknown"
     lines = [f"# {c['title']} for MWSE (unofficial mwsuite conversion)", "",
              notice_text(c), "",
              "## Support", "",
-             f"This build is made and maintained by {MAINTAINER}. Please do not send bug reports or support",
-             f"requests about it to {author}: problems may come from the conversion, not from the original mod.", "",
+             SUPPORT_LINE,
+             f"Please do not send bug reports or support requests about this build to {author}: problems may come",
+             "from the conversion, not from the original mod.", "",
              "## Credits", "",
              f"- Original mod: {c['title']} by {author}" + (f" ({c['url']})" if c.get("url") else ""),
              f"- Original license / permissions: {c.get('license') or 'see the original mod page'}",
              f"- Conversion: omw2mwse + omwcompat runtime by {MAINTAINER} (MIT)", "",
              "## Contents", "",
-             f"- `MWSE/mods/{name}/main.lua`: generated loader",
-             f"- `MWSE/omw/{name}/`: the original OpenMW Lua" + (", with hard-coded values exposed as settings"
-                                                                 " (verbatim originals in `_original/`)" if accepted else ", unmodified"),
-             "- `MWSE/lib/omwcompat/`: the runtime that hosts it",
-             f"- In game: Mod Config menu entry `{MCM_GROUP}: {c['title']}` (when the mod has settings)", ""]
+             f"- `{SUITE_DIR}/{name}/main.lua`: generated loader (MWSE loads main.lua at any depth)",
+             f"- `{SUITE_DIR}/{name}/omw/`: the original OpenMW Lua" + (", with hard-coded values exposed as settings"
+                                                                      " (verbatim originals in `omw/_original/`)" if accepted else ", unmodified"),
+             f"- `Off/{name}/OpenMW/`: the complete original OpenMW package, untouched",
+             "- `MWSE/lib/omwcompat/`: the runtime that hosts it (shared by all converted mods)",
+             f"- In game: Mod Config menu entry `{MCM_NAME}`, tab `{c['title']}` (always present; it lists "
+             "the original mod, its author and who to ask for support)", ""]
     return "\n".join(lines)
 
 
@@ -403,7 +468,7 @@ def render_main(name: str, scripts, meshmap: dict[str, str], probe: bool = False
                 title: str | None = None, credits: dict | None = None) -> str:
     lines = [
         f"-- {name}: MWSE loader generated by omw2mwse {__version__}.",
-        "-- The OpenMW Lua lives in Data Files/MWSE/omw/" + name + "/ and is hosted by the",
+        f"-- The OpenMW Lua lives in Data Files/{SUITE_DIR}/" + name + "/omw/ and is hosted by the",
         "-- omwcompat runtime (Data Files/MWSE/lib/omwcompat).",
         "-- Generated file: re-run omw2mwse instead of editing.",
         "-- " + notice_text(credits or {"title": title or name}),
@@ -420,7 +485,7 @@ def render_main(name: str, scripts, meshmap: dict[str, str], probe: bool = False
         lines.append(f"    title = {lua_str(title)},")
     if credits:
         lines.append("    credits = { " + ", ".join(f"{k} = {lua_str(str(v))}" for k, v in sorted(credits.items())) + " },")
-    lines += [f"    root = {lua_str('Data Files/MWSE/omw/' + name + '/')},", "    scripts = {"]
+    lines += [f"    root = {lua_str('Data Files/' + SUITE_DIR + '/' + name + '/omw/')},", "    scripts = {"]
     for s in scripts:
         flags = ", ".join(lua_str(f) for f in s.flags)
         lines.append(f"        {{ flags = {{ {flags} }}, path = {lua_str(s.path)} }},")
@@ -476,7 +541,7 @@ def render_metadata(name: str, src_name: str, credits: dict | None = None) -> st
         + (f"homepage = {_toml_str(c['url'])}\n" if c.get("url") else "")
         + "\n"
         "[tools.mwse]\n"
-        f"lua-mod = {_toml_str(name)}\n"
+        f"lua-mod = {_toml_str(lua_mod_id(name))}\n"
     )
 
 
@@ -498,13 +563,14 @@ class BuildResult:
     alerts: list = field(default_factory=list)
     credits: dict = field(default_factory=dict)
     off_rel: str = ""
+    mod_rel: str = ""
     off_copied: list = field(default_factory=list)  # original-package relative paths
 
 
 def build(src: Path, writer: Writer, name: str, *, data_prefix: str = "", slug: str | None = None,
           with_runtime: bool = True, meshes_from: list[Path] | None = None, mode: str = "normal",
           sidecar: dict | None = None, confirm=None, manifest: dict | None = None,
-          title: str | None = None, credits: dict | None = None) -> BuildResult:
+          title: str | None = None, credits: dict | None = None, meta_dirs: list | None = None) -> BuildResult:
     """Plan all outputs for one mod into writer (paths relative to writer.root, under data_prefix).
 
     confirm(plan) -> accepted conversions (raises warn.Refused); required when mode == 'hardcode'.
@@ -517,9 +583,11 @@ def build(src: Path, writer: Writer, name: str, *, data_prefix: str = "", slug: 
         raise BuildError(f"{src}: no .omwscripts declarations found; nothing to host")
     slug = slug or default_slug(name)
     D = (data_prefix.rstrip("/") + "/") if data_prefix else ""
-    omw = f"{D}MWSE/omw/{name}/"
+    mdir = mod_dir(name, data_prefix)
+    omw = mdir + "omw/"
     off = original_off_prefix(name, data_prefix)
     res = BuildResult(name=name, slug=slug, source=str(src), scan=scan, writer=writer, omw_rel=omw, off_rel=off)
+    res.mod_rel = mdir
 
     # 0. Complete original OpenMW package at Off/<plugin>/OpenMW/<original paths>
     for p, rel in iter_original_files(src):
@@ -590,11 +658,11 @@ def build(src: Path, writer: Writer, name: str, *, data_prefix: str = "", slug: 
     for target_rel, (rel, data) in sorted(lua.items()):
         if target_rel in by_file:
             new = K.rewrite(texts[target_rel], by_file[target_rel])
-            writer.put(omw + target_rel, text_bytes(new))
-            writer.put(omw + "_original/" + target_rel, data)
+            writer.put(omw + hosted_name(target_rel), text_bytes(new))
+            writer.put(omw + "_original/" + hosted_name(target_rel), data)
             res.copied.append((rel, target_rel, True))
         else:
-            writer.put(omw + target_rel, data)
+            writer.put(omw + hosted_name(target_rel), data)
             res.copied.append((rel, target_rel, False))
     for om in find_omwscripts(src):
         r = om.relative_to(src).as_posix()
@@ -636,12 +704,12 @@ def build(src: Path, writer: Writer, name: str, *, data_prefix: str = "", slug: 
                "description": mcm.get("description", "Values the mod author hard-coded, exposed by omw2mwse. "
                                       "Defaults are the author's values."),
                "conversions": accepted}
-    cred = credits_of(name, sidecar, title, credits)
+    cred = credits_of(name, sidecar, title, credits, detect_credits([src] + list(meta_dirs or [])))
     res.credits = cred
-    writer.put(f"{D}MWSE/mods/{name}/main.lua", text_bytes(render_main(name, scan.scripts, meshmap, probe, cfg,
+    writer.put(f"{mdir}main.lua", text_bytes(render_main(name, scan.scripts, meshmap, probe, cfg,
                                                                         title or cred.get("title"), cred)))
     writer.put(f"{D}{name}-metadata.toml", text_bytes(render_metadata(name, src.name, cred)))
-    writer.put(f"{omw}README-mwsuite.md", text_bytes(render_readme(name, cred, mode, accepted)))
+    writer.put(f"{mdir}README-mwsuite.md", text_bytes(render_readme(name, cred, mode, accepted)))
     if with_runtime:
         writer.put(f"{D}MWSE/lib/omwcompat.lua", (RUNTIME_LIB / "omwcompat.lua").read_bytes())
         for f in sorted((RUNTIME_LIB / "omwcompat").iterdir()):

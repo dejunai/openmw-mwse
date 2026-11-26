@@ -5,8 +5,9 @@ local util = require("omwcompat.util")
 local serial = require("omwcompat.serial")
 local objects = require("omwcompat.objects")
 local settings = require("omwcompat.settings")
+local conversions = require("omwcompat.conversions")
 
-local RT = { VERSION = "0.2.0", API_REVISION = 70, PROBE_API_REVISION = 100 }
+local RT = { VERSION = "0.2.1", API_REVISION = 70, PROBE_API_REVISION = 100 }
 objects.init(RT)
 settings.init(RT)
 
@@ -183,6 +184,7 @@ local function weatherInfo(w)
     return { name = name, recordId = name and name:lower() or nil, index = idx, scriptId = name }
 end
 
+local loadHosted
 local function buildModules(m, S)
     local types = objects.types
     local core = unsupportedProxy("openmw.core", {
@@ -498,7 +500,7 @@ local function makeEnv(m, S)
         end
         if mod == nil then
             local rel = name:gsub("%.", "/")
-            local f = loadfile(m.root .. rel .. ".lua") or loadfile(m.root .. rel .. "/init.lua")
+            local f = loadHosted(m.root .. rel .. ".lua") or loadHosted(m.root .. rel .. "/init.lua")
             if not f then error("omwcompat: cannot find module '" .. name .. "' under " .. m.root, 2) end
             setfenv(f, env)
             mod = f(name)
@@ -508,6 +510,16 @@ local function makeEnv(m, S)
         return mod
     end
     return env
+end
+
+-- MWSE runs every main.lua it finds under MWSE/mods, at any depth. omw2mwse stores a hosted
+-- script named main.lua as main.lua.omw so MWSE does not run it as a mod; load either name.
+loadHosted = function(path)
+    local f, err = loadfile(path)
+    if f then return f end
+    local f2 = loadfile(path .. ".omw")
+    if f2 then return f2 end
+    return nil, err
 end
 
 local function instantiate(m, spec, probe)
@@ -527,7 +539,7 @@ local function instantiate(m, spec, probe)
             end
         end
     end
-    local f, err = loadfile(m.root .. spec.path)
+    local f, err = loadHosted(m.root .. spec.path)
     if not f then reportError("load " .. spec.path, err); return nil end
     setfenv(f, makeEnv(m, S))
     if probe then
@@ -812,17 +824,14 @@ end
 
 ---------------------------------------------------------------- mwsuite notice
 -- Converted mods are maintained by mwsuite; original authors must not get support
--- requests for them. Every generated MCM is listed under this prefix (MWSE's mod list
--- is flat: there is no grouping mechanism, so the prefix keeps them together).
-RT.MCM_GROUP = "mwsuite - OpenMW"
+-- requests for them. They all appear in one Mod Config Menu entry, "MW Conversions",
+-- one tab per mod (see conversions.lua), instead of one list entry each.
+RT.MCM_NAME = conversions.NAME
 function RT.notice(m)
-    local c = m.credits or {}
-    local title = c.title or m.title or m.name
-    local author = c.author or "the original author"
-    local s = "Unofficial mwsuite conversion of " .. title .. " by " .. author .. " (OpenMW Lua hosted on MWSE by omwcompat). "
-        .. "Report issues to mwsuite / dej (dejunai), not to " .. author .. "."
-    if c.license then s = s .. " Original license: " .. c.license .. "." end
-    if c.url then s = s .. " Original: " .. c.url end
+    local a = conversions.about(m)
+    local s = "Unofficial mwsuite conversion of " .. a.title .. " (original author: " .. a.author .. "). " .. conversions.SUPPORT
+    if a.license then s = s .. " Original license: " .. a.license .. "." end
+    if a.url then s = s .. " Original: " .. a.url end
     return s
 end
 
@@ -835,14 +844,11 @@ function RT.onModConfigReady()
     RT.mcm = RT.mcm or {}
     for _, m in ipairs(mods) do
         if m.spec.probeSettings then probeSettings(m) end
-        local ok, summary = pcall(settings.buildMCM, m, { pageNote = m.cfgNote, notice = RT.notice(m),
-            prefix = RT.MCM_GROUP .. ": " })
-        if ok then
-            RT.mcm[m.name] = summary
-        else
-            reportError(m.name .. " MCM", summary)
-        end
     end
+    if #mods == 0 then return end
+    local summaries, template = conversions.build(mods, settings.addTab, settings.closeMod)
+    RT.mcm = summaries
+    RT.mcmTemplate = template
 end
 
 ---------------------------------------------------------------- registration
@@ -859,7 +865,7 @@ local function wire()
     event.register(tes3.event.modConfigReady, RT.onModConfigReady)
 end
 
--- spec = { mod = "Name", root = "Data Files/MWSE/omw/Name/", scripts = {{flags={"GLOBAL"}, path="scripts/x.lua"}},
+-- spec = { mod = "Name", root = "Data Files/MWSE/mods/mwsuite/openmw/Name/omw/", scripts = {{flags={"GLOBAL"}, path="scripts/x.lua"}},
 --          meshmap = { ["long/path.nif"] = "omwc/x/abcdef12.nif" }, debug = false,
 --          probeSettings = true,      -- collect I.Settings declarations for the MCM at modConfigReady
 --          settings = {               -- omw2mwse hard-code conversions (sidecar)

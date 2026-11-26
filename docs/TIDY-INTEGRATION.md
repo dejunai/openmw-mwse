@@ -36,18 +36,18 @@ Game-loadable assets from the original package (`meshes/`, `textures/`, `icons/`
 `sounds/`, `music/`, `fonts/`, `splash/`, `video/`, `bookart/`, and loose
 `.esp`/`.esm`/`.bsa`/`.omwaddon`/`.omwgame`) are also installed at the Data Files
 root so Morrowind / MWSE can load them. Hosted (possibly rewritten) Lua stays in
-`MWSE/omw/<Mod>/`. Generated files (the loader, aliases, runtime, metadata, reports)
+`MWSE/mods/mwsuite/openmw/<Mod>/omw/`. Generated files (the loader, aliases, runtime, metadata, reports)
 are never written under `Off/`.
 
 | Output (relative to the staged folder, or to `OUT/Data Files/` for `package`) | What |
 |---|---|
 | `Off/<Mod>/OpenMW/<original paths>` | complete original OpenMW package, byte-identical, author's relative paths |
-| `MWSE/mods/<Mod>/main.lua` | generated loader |
-| `MWSE/omw/<Mod>/...` | the hosted OpenMW Lua, `.omwscripts`, `l10n/` |
-| `MWSE/omw/<Mod>/_original/...` | verbatim originals of files rewritten for hard-coded values |
-| `MWSE/omw/<Mod>/README-mwsuite.md` | notice: unofficial mwsuite conversion, support goes to mwsuite / dej (dejunai), credits |
-| `MWSE/omw/<Mod>/OMW2MWSE-REPORT.md` | human-readable report |
-| `MWSE/omw/<Mod>/omw2mwse-manifest.json` | files omw2mwse owns, with SHA-256 (used for idempotency) |
+| `MWSE/mods/mwsuite/openmw/<Mod>/main.lua` | generated loader (MWSE loads `main.lua` at any depth) |
+| `MWSE/mods/mwsuite/openmw/<Mod>/omw/...` | the hosted OpenMW Lua, `.omwscripts`, `l10n/` (a hosted `main.lua` is stored as `main.lua.omw`) |
+| `MWSE/mods/mwsuite/openmw/<Mod>/omw/_original/...` | verbatim originals of files rewritten for hard-coded values |
+| `MWSE/mods/mwsuite/openmw/<Mod>/README-mwsuite.md` | notice: unofficial mwsuite conversion, support goes to dej (dejunai) via the Nexus forums, credits |
+| `MWSE/mods/mwsuite/openmw/<Mod>/OMW2MWSE-REPORT.md` | human-readable report |
+| `MWSE/mods/mwsuite/openmw/<Mod>/omw2mwse-manifest.json` | files omw2mwse owns, with SHA-256 (used for idempotency) |
 | `MWSE/lib/omwcompat.lua`, `MWSE/lib/omwcompat/` | runtime (skip with `--no-runtime`) |
 | `meshes/`, `textures/`, ... | original game assets, also kept under `Off/<Mod>/OpenMW/` |
 | `meshes/omwc/<slug>/<hash>.nif` | short aliases for mesh paths longer than 31 chars, copied from `meshes/` in the folder |
@@ -101,7 +101,7 @@ omw2mwse outputs, such as `MWSE/mods/LTLOHandportMigration/`, are never deleted.
 
 ```json
 {
- "tool": "omw2mwse", "version": "0.2.0", "command": "convert", "mode": "normal",
+ "tool": "omw2mwse", "version": "0.2.1", "command": "convert", "mode": "normal",
  "dir": "...", "dryRun": false, "changed": true, "exitCode": 0, "alerts": [],
  "mods": [{
    "name": "LeaveTheLightsOff", "source": "Off/LeaveTheLightsOff/OpenMW",
@@ -110,9 +110,9 @@ omw2mwse outputs, such as `MWSE/mods/LTLOHandportMigration/`, are never deleted.
    "status": "ok", "verdict": "ready", "coverage": [46, 46],
    "settings": {"groups": [], "coverage": [0, 0], "mcm": false},
    "rewrites": [], "hardcodeLog": [], "conflicts": [],
-   "files": {"MWSE/mods/LeaveTheLightsOff/main.lua": "created"},
+   "files": {"MWSE/mods/mwsuite/openmw/LeaveTheLightsOff/main.lua": "created"},
    "newGameRequired": false,
-   "notice": "Unofficial mwsuite conversion of ... Report issues to mwsuite / dej (dejunai), not to ...",
+   "notice": "Unofficial mwsuite conversion of ... (original author: ...). Unofficial conversion by mwsuite. Do not contact the original author about it. Support: dej (dejunai) via the Nexus Mods forums.",
    "alerts": [
      {"level": "info", "code": "hardcode-candidate", "file": "scripts/LeaveTheLightsOff/LTLO_g.lua",
       "line": 393, "kind": "literal", "context": "clockHour < 7", "type": "number", "value": "7",
@@ -137,13 +137,28 @@ cannot tell, so tidy should say so when it replaces a non-omw2mwse `main.lua` (t
 
 ## Credits and the support notice
 
-Every build says it is an unofficial mwsuite conversion, says to report issues to
-mwsuite / dej (dejunai) and not to the original author, and credits the original author,
-license and page. This appears in the MCM (named `mwsuite - OpenMW: <title>`), the MWSE.log
-registration line, the metadata, the README and the report. The credits come from the
-sidecar's `[mod]` table (`title`, `author`, `license`, `url`) or from `--title`, `--author`,
-`--license` and `--source-url`. tidy should pass these when it knows them; otherwise the
-notice says "the original author".
+Every build says it is an unofficial mwsuite conversion, credits the original mod, author,
+license and page, and carries ONE fixed support line, the same whether conflict-tools or
+MWManager packed it:
+
+> Unofficial conversion by mwsuite. Do not contact the original author about it. Support: dej (dejunai) via the Nexus Mods forums.
+
+(`SUPPORT_LINE` in `build.py`, `C.SUPPORT` in `conversions.lua`; a test keeps them equal.)
+In game all converted mods share one Mod Config entry, **MW Conversions**: tab 1 is a fixed
+general disclaimer, and every converted mod gets its own tab from tab 2 on, always, even with
+nothing to configure. Each tab shows the original mod name, original author and the support
+line. The same text goes in the MWSE.log registration line, the metadata, the README and the
+report. Mod name, author and page come from, in order: `--title` / `--author` / `--license` /
+`--source-url`, the sidecar's `[mod]` table, then metadata found next to the source
+(`fomod/info.xml` Name/Author/Website, or an original `*-metadata.toml`; `convert` also looks in
+the staged folder root). Without any of these the tab says `Original author: unknown`; tidy
+should pass the options when it knows them.
+
+## Migrating a 0.2.0 layout
+
+`convert` recognises the 0.2.0 locations (`MWSE/mods/<Mod>/main.lua`, `MWSE/omw/<Mod>/`) via
+their manifest, removes those files when they are unmodified, and writes the new layout. A
+hand-written `MWSE/mods/<Mod>/main.lua` is left alone and reported (`legacy-loader-present`).
 
 ## Several converted mods in one load order
 

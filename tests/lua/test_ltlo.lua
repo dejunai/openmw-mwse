@@ -44,7 +44,7 @@ end
 local function isLit(r) return not r.disabled and not r._gone end
 
 -- boot ---------------------------------------------------------------------
-dofile("Data Files/MWSE/mods/LeaveTheLightsOff/main.lua")
+dofile("Data Files/MWSE/mods/mwsuite/openmw/LeaveTheLightsOff/main.lua")
 mock.fire("initialized", {})
 mock.setHour(12)
 mock.fire("loaded", { newGame = true })

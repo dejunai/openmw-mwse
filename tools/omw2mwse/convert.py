@@ -10,7 +10,9 @@ are never edited; only the location of the original tree changes (legacy layouts
 such as Off/OpenMW/<plugin>/ are relocated on the first successful run). Game
 assets (meshes, textures, ...) are also installed at the Data Files root so
 Morrowind can load them. Running it again with the same inputs changes nothing
-(idempotent): ownership is tracked in MWSE/omw/<Mod>/omw2mwse-manifest.json.
+(idempotent): ownership is tracked in MWSE/mods/mwsuite/openmw/<Mod>/omw2mwse-manifest.json.
+Converted mods live at MWSE/mods/mwsuite/openmw/<Mod>/ (loader main.lua, hosted Lua in omw/);
+a 0.2.0 layout (MWSE/mods/<Mod>/, MWSE/omw/<Mod>/) is migrated on the first run.
 MIT, Copyright (c) 2026 dej (dejunai).
 """
 from __future__ import annotations
@@ -23,7 +25,7 @@ from pathlib import Path
 from . import __version__
 from . import sidecar as SC
 from . import warn
-from .build import (MANIFEST_NAME, BuildError, Writer, build, is_game_asset, iter_original_files,
+from .build import (MANIFEST_NAME, BuildError, Writer, build, is_game_asset, iter_original_files, mod_dir,
                     notice_text, original_off_prefix, sha256b, text_bytes)
 from .scan import load_manifest
 
@@ -180,14 +182,16 @@ def convert(staged: Path, mode: str = "normal", *, name: str | None = None, sour
                 continue
             result["alerts"].append({"level": "info", "code": "duplicate-source",
                                      "message": f"{dup.relative_to(staged)} is identical to {src.relative_to(staged)}; used the latter"})
-        man_rel = f"MWSE/omw/{modname}/{MANIFEST_NAME}"
+        man_rel = f"{mod_dir(modname)}{MANIFEST_NAME}"
+        legacy_rel = f"MWSE/omw/{modname}/{MANIFEST_NAME}"     # 0.2.0 layout
         prev = {}
         mp = staged / man_rel
-        if mp.is_file():
-            try:
-                prev = json.loads(mp.read_text(encoding="utf-8")).get("files", {})
-            except (OSError, ValueError):
-                result["alerts"].append({"level": "warning", "code": "manifest-unreadable", "message": man_rel})
+        for rel_m in (legacy_rel, man_rel):
+            if (staged / rel_m).is_file():
+                try:
+                    prev.update(json.loads((staged / rel_m).read_text(encoding="utf-8")).get("files", {}))
+                except (OSError, ValueError):
+                    result["alerts"].append({"level": "warning", "code": "manifest-unreadable", "message": rel_m})
         w = Writer(staged, previous=prev, adopt=adopt)
         sc = None
         if mode == "hardcode":
@@ -210,13 +214,14 @@ def convert(staged: Path, mode: str = "normal", *, name: str | None = None, sour
         entry = {"name": modname, "source": str(src.relative_to(staged)) if staged in src.parents else str(src)}
         try:
             res = build(src, w, modname, slug=None, with_runtime=with_runtime, meshes_from=mesh_dirs, mode=mode,
-                        sidecar=sc, confirm=confirm, manifest=manifest, title=title, credits=credits)
+                        sidecar=sc, confirm=confirm, manifest=manifest, title=title, credits=credits,
+                        meta_dirs=[staged])
         except warn.Refused as e:
             entry.update({"status": "refused", "message": str(e), "warning": warning_box.get("text")})
             result["mods"].append(entry)
             result["exitCode"] = EXIT_REFUSED
             continue
-        w.put(f"MWSE/omw/{modname}/OMW2MWSE-REPORT.md", text_bytes(res.report_md))
+        w.put(f"{mod_dir(modname)}OMW2MWSE-REPORT.md", text_bytes(res.report_md))
         w.check()
         ok, total = res.scan.coverage()
         so, st = res.scan.settings_coverage()
@@ -244,6 +249,14 @@ def convert(staged: Path, mode: str = "normal", *, name: str | None = None, sour
             continue
         if not dry_run:
             w.commit()
+            for legacy in (staged / "MWSE" / "omw" / modname, staged / "MWSE" / "mods" / modname):
+                if legacy.is_dir():
+                    _prune_empty_dirs(legacy, staged)
+            old_loader = staged / "MWSE" / "mods" / modname / "main.lua"
+            if old_loader.is_file():
+                entry["alerts"].append({"level": "warning", "code": "legacy-loader-present",
+                                        "message": f"MWSE/mods/{modname}/main.lua is not an omw2mwse file and would load "
+                                                   "alongside the converted mod; remove it if it is an older build or hand port"})
             moved = relocate_original(src, staged, modname)
             if moved:
                 previous_src = entry["source"]

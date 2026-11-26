@@ -43,7 +43,7 @@ local refs = {
 }
 mock.newPlayer(ext)
 if mode == "omw" then
-    dofile("Data Files/MWSE/mods/LeaveTheLightsOff/main.lua")
+    dofile("Data Files/MWSE/mods/mwsuite/openmw/LeaveTheLightsOff/main.lua")
 else
     W.config = { leavethelightsoff = { dayStart = 7, enabled = true, log = false, dayEnd = 18, darkWeather = true } }
     dofile(os.getenv("TESTS_DIR") .. "/../../reference/mwse_dej/main.lua")

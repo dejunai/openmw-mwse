@@ -44,6 +44,7 @@ function M.install(opts)
                 child.variable = args and args.variable
                 child.text = args and args.text
                 child.options = args and args.options
+                if k == "SideBarPage" then child.sidebar = container("SideBar", {}) end
                 self.children[#self.children + 1] = child
                 return child
             end

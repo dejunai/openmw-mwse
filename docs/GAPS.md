@@ -1,4 +1,4 @@
-# Known gaps and risks (omwcompat 0.2.0 + LTLO)
+# Known gaps and risks (omwcompat 0.2.1 + LTLO)
 
 ## What has been verified, and only on the box
 
@@ -24,7 +24,7 @@
    `1 - transitionScalar`, which assumes MWSE's scalar runs from 0 to 1. Dej's port makes the same
    assumption with `> 0.5`. If it is backwards, lights switch near the start of a storm
    transition instead of the end. Checklist item 5 tests this.
-3. **Script paths.** The loader uses `loadfile("Data Files/MWSE/omw/...")` and `io.open`, relative
+3. **Script paths.** The loader uses `loadfile("Data Files/MWSE/mods/mwsuite/openmw/<Mod>/omw/...")` and `io.open`, relative
    to the game folder, which is the working directory MWSE normally has. A different working
    directory would make the script fail to load, and MWSE.log would show it.
 4. **Replacer detection** reads loose files with `io.open` and checks their sizes. This works for

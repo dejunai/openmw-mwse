@@ -56,22 +56,41 @@ local lantern = mock.placeRef(ext, "light_de_lantern_01", { 100, 200, 300 })
 local player = mock.newPlayer(ext)
 local function lit(r) return not r.disabled end
 
-dofile("Data Files/MWSE/mods/LeaveTheLightsOff/main.lua")
+dofile("Data Files/MWSE/mods/mwsuite/openmw/LeaveTheLightsOff/main.lua")
 local rt = require("omwcompat")
 rt.register({ mod = "Synth", root = SYN, scripts = { { flags = { "GLOBAL" }, path = "scripts/s.lua" } }, probeSettings = true })
+rt.register({ mod = "Plain", root = SYN, scripts = {}, credits = { title = "Plain Mod", author = "Zed" } })
 mock.fire("initialized", {})
 mock.fire("modConfigReady", {})
 
-section("generated MCMs")
-check(#W.mcm == 2, "two MCM templates registered (got " .. #W.mcm .. ")")
+section("generated MCM: one 'MW Conversions' entry, one tab per mod")
+local SUPPORT = "Unofficial conversion by mwsuite. Do not contact the original author about it. Support: dej (dejunai) via the Nexus Mods forums."
+check(#W.mcm == 1, "exactly one MCM template registered (got " .. #W.mcm .. ")")
+local tpl = W.mcm[1]
+check(tpl and tpl.name == "MW Conversions", "template is named 'MW Conversions'")
 local ltloT, synT
-for _, t in ipairs(W.mcm) do
-    if t.name == "mwsuite - OpenMW: Leave The Lights Off" then ltloT = t elseif t.name == "mwsuite - OpenMW: Synth Page" then synT = t end
+for _, pg in ipairs(tpl.children) do
+    if pg.kind == "SideBarPage" then
+        if pg.label == "Leave The Lights Off" then ltloT = pg elseif pg.label == "Synth" then synT = pg end
+    end
 end
-check(ltloT ~= nil, "LTLO template listed as 'mwsuite - OpenMW: Leave The Lights Off'")
-check(synT ~= nil, "synthetic template: prefix + l10n page name")
+check(#tpl.children == 4, "four tabs: disclaimer plus one per converted mod (got " .. #tpl.children .. ")")
+local disc = tpl.children[1]
+check(disc.label == "Disclaimer", "tab 1 is the general disclaimer")
+local dtext = {}
+for _, ch in ipairs(disc.children) do dtext[#dtext + 1] = ch.text end
+dtext = table.concat(dtext, "\n")
+for _, phrase in ipairs({ "experimental and unofficial", "retains all rights", "not affiliated with mwsuite", "without warranty of any kind",
+    "omw2mwse", "omwcompat", "dej (dejunai) via the Nexus Mods forums" }) do
+    check(dtext:find(phrase, 1, true), "disclaimer says: " .. phrase)
+end
+local plainT = tpl.children[3]
+check(plainT.label == "Plain Mod" and plainT.children[1].text:find("Original author: Zed", 1, true) and plainT.children[2].text == "This mod has no settings to configure.", "a mod with nothing to configure still gets a tab with name, author and support")
+check(tpl.children[2] == ltloT and tpl.children[4] == synT, "per-mod tabs start at tab 2, sorted by original mod name")
+check(ltloT ~= nil, "LTLO tab labelled with the original mod name")
+check(synT ~= nil, "synthetic mod tab exists (name fallback, no credits)")
 local controls = ltloT and mock.mcmControls(ltloT) or {}
-check(#controls == 11, "LTLO MCM has 11 controls (got " .. #controls .. ")")
+check(#controls == 11, "LTLO tab has 11 controls (got " .. #controls .. ")")
 local function find(t, label) return mock.mcmFind(t, label) end
 local endH = find(ltloT, "Night ends at (hour)")
 local startH = find(ltloT, "Night starts after (hour)")
@@ -82,20 +101,25 @@ check(stale and stale.kind == "Slider" and stale.args.decimalPlaces == 2, "stale
 check(rain and rain.kind == "OnOffButton" and mock.mcmGet(rain) == false, "rain: on/off button, default off")
 check(endH and endH.description:find("Default: 7", 1, true) and endH.description:find("Applies immediately", 1, true), "night end description shows default and live apply")
 check(rain and rain.description:find("Applies when a save is loaded", 1, true), "rain description says it applies on reload")
-local page1 = ltloT and ltloT.children[1]
+local page1 = ltloT
 local info1 = page1 and page1.children[1]
 local cat = page1 and page1.children[2]
 check(cat and cat.label == "Tunables (hard-coded in the original)", "LTLO category label from sidecar")
-local NOTICE = "Unofficial mwsuite conversion of Leave The Lights Off by OwnlyMe"
-check(info1 and info1.kind == "Info" and info1.text:find(NOTICE, 1, true) and info1.text:find("Report issues to mwsuite / dej (dejunai), not to OwnlyMe.", 1, true),
-    "first MCM item is the mwsuite support notice")
-check(page1 and page1.description:find(NOTICE, 1, true) == 1 and page1.description:find("nexusmods.com/morrowind/mods/57510", 1, true),
-    "page sidebar starts with the notice and credits the original")
+local NOTICE = "Unofficial mwsuite conversion of Leave The Lights Off (original author: OwnlyMe)"
+check(info1 and info1.kind == "Info" and info1.text:find("Original mod: Leave The Lights Off\nOriginal author: OwnlyMe", 1, true)
+    and info1.text:find(SUPPORT, 1, true), "tab text: original mod, author, support line")
+local sb = page1.sidebar and page1.sidebar.children[1]
+check(sb and sb.text == info1.text, "sidebar repeats the same text")
+check(page1.description:find("nexusmods.com/morrowind/mods/57510", 1, true), "tab credits the original page")
+local synInfo = synT.children[1]
+check(synInfo.text:find("Original mod: Synth\nOriginal author: unknown", 1, true) and synInfo.text:find(SUPPORT, 1, true),
+    "a mod without credits still names itself, 'unknown' author and the support line")
 local logged = false
 for _, l in ipairs(W.logs) do
-    if l:find("registered LeaveTheLightsOff", 1, true) and l:find(NOTICE, 1, true) and l:find("not to OwnlyMe", 1, true) then logged = true end
+    if l:find("registered LeaveTheLightsOff", 1, true) and l:find(NOTICE, 1, true) and l:find(SUPPORT, 1, true) then logged = true end
 end
 check(logged, "MWSE.log registration line carries the notice")
+
 
 section("LTLO: day/night with defaults")
 mock.setHour(12)
@@ -111,7 +135,7 @@ W.menuMode = true
 mock.mcmSet(startH, 21)
 mock.frames(5)
 W.menuMode = false
-mock.mcmClose(ltloT)
+mock.mcmClose(tpl)
 mock.frames(120)
 check(mock.mcmGet(startH) == 21, "MCM reads back 21")
 check(not lit(lantern), "20:00 is now day: change applied without reload")
@@ -130,7 +154,7 @@ W.menuMode = true
 mock.mcmSet(rain, true)
 mock.frames(60)
 check(not lit(lantern), "not applied while the menu is open")
-mock.mcmClose(ltloT)
+mock.mcmClose(tpl)
 W.menuMode = false
 local reloaded = false
 for _, l in ipairs(W.logs) do if l:find("reloaded to apply changed settings") then reloaded = true end end

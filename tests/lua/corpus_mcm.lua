@@ -9,7 +9,7 @@ local W = mock.W
 local ext = mock.addCell({ id = "Balmora", gridX = -3, gridY = -2, hasSky = true })
 W.activeCell = ext
 mock.newPlayer(ext)
-dofile("Data Files/MWSE/mods/" .. name .. "/main.lua")
+dofile("Data Files/MWSE/mods/mwsuite/openmw/" .. name .. "/main.lua")
 local rt = require("omwcompat")
 mock.fire("initialized", {})
 mock.fire("modConfigReady", {})

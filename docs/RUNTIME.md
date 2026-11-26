@@ -14,15 +14,23 @@ It runs OpenMW GLOBAL scripts unmodified. Version 0.1.0 (MVP).
 | `omwcompat/util.lua` | `openmw.util`: vectors, transforms, colors, helpers. |
 | `omwcompat/manifest.json` | Support status of each symbol. The `omw2mwse scan` command reads it. |
 
-A packaged mod adds `MWSE/mods/<Mod>/main.lua`, which calls:
+A packaged mod adds `MWSE/mods/mwsuite/openmw/<Mod>/main.lua`, which calls:
 
 ```lua
-require("omwcompat").register({ mod = "<Mod>", root = "Data Files/MWSE/omw/<Mod>/",
+require("omwcompat").register({ mod = "<Mod>", root = "Data Files/MWSE/mods/mwsuite/openmw/<Mod>/omw/",
     scripts = { { flags = { "GLOBAL" }, path = "scripts/..." } }, meshmap = { ... } })
 ```
 
-The OpenMW tree goes under `MWSE/omw/<Mod>/`, not under `MWSE/mods/`, so MWSE does not try to
-run it as an MWSE mod.
+**Layout (0.2.1).** All converted mods live under `MWSE/mods/mwsuite/openmw/<Mod>/` (MWSE loads
+`main.lua` at any depth), so they are easy to find next to the suite's own mods. The hosted
+OpenMW Lua is in that folder's `omw/` subfolder, loaded with `loadfile`, not `require`, so no
+`mwsuite.openmw.<Mod>` module path is involved. MWSE runs *every* `main.lua` it finds under
+`MWSE/mods`, so a hosted script that is itself called `main.lua` is stored as `main.lua.omw`
+(the runtime loads either name; `Off/` keeps the real name). The runtime stays at
+`MWSE/lib/omwcompat*`: that is on MWSE's guaranteed library path, so `require("omwcompat")`
+works with or without the suite's own `mwsuite/main.lua` (which edits `package.path`), there is
+one copy shared by every converted mod, and it has no `main.lua` so MWSE never runs it as a mod.
+The complete original package is `Off/<Mod>/OpenMW/<original paths>`.
 
 ## Script host
 
@@ -126,11 +134,17 @@ activation is also blocked when the target becomes invalid inside a handler, for
   async:callback are inert stand-ins, and `API_REVISION` reads 100. That collects the groups
   even from PLAYER/MENU scripts that omwcompat cannot host yet. Their MCM then says changes
   have no effect in game.
-- **MCM naming:** MWSE's Mod Config list is flat. `mwse.mcm.createTemplate` takes a `name`
-  and an optional header image, and categories exist only inside a page, so there is no way
-  to group mods in the list. Every generated template is therefore named
-  `mwsuite - OpenMW: <title>`. The first page starts with the mwsuite support notice (an info
-  item and the sidebar text). The same notice ends the MWSE.log registration line.
+- **One shared MCM, "MW Conversions"** (`omwcompat/conversions.lua`). MWSE's Mod Config list
+  is flat, so all converted mods share one template, as the suite's `mwmanagermenu` does for
+  "MW Conflict Tools". That mod hooks `mwse.registerModConfig` to capture templates the suite
+  mods already built; converted mods all register through this one runtime, so the template is
+  built directly at `modConfigReady`, one MWSE page (tab) per mod. Tab 1 is always the fixed
+  `Disclaimer` page (`C.DISCLAIMER`); mod tabs start at tab 2, sorted by original mod name. A
+  mod tab is always created, even with nothing to configure, and shows `Original mod:`,
+  `Original author:` (or `unknown`), page/license when known, and the one support constant
+  `C.SUPPORT` (in the sidebar and as the first item). Settings groups follow as categories. The
+  same support line ends the MWSE.log registration line. Closing the menu saves every mod's
+  settings and applies pending reloads.
 - Hard-coded values that omw2mwse converted call `omwcompat.cfg(key, original)`, which reads
   the `omw2mwse_<Mod>` group (and falls back to the original value when the stored type is
   wrong). `apply = "live"` values are read on every evaluation. For `apply = "reload"` values,

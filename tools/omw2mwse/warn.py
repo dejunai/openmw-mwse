@@ -18,7 +18,7 @@ GENERAL = [
     "The MCM accepts only the type and min/max given here; anything outside the",
     "author's tested range is untested behaviour.",
     "The rewritten Lua is no longer byte-identical to the author's; the verbatim",
-    "original is kept next to it under MWSE/omw/<Mod>/_original/.",
+    "original is kept next to it under MWSE/mods/mwsuite/openmw/<Mod>/omw/_original/.",
 ]
 
 

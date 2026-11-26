@@ -15,6 +15,7 @@ from omw2mwse import constants as K  # noqa: E402
 from omw2mwse import sidecar as SC  # noqa: E402
 from omw2mwse import warn  # noqa: E402
 from omw2mwse.cli import main, translate_tidy_flag  # noqa: E402
+from omw2mwse.build import SUPPORT_LINE  # noqa: E402
 from omw2mwse.convert import EXIT_CONFLICT, EXIT_OK, EXIT_REFUSED, convert  # noqa: E402
 from omw2mwse.scan import scan_mod  # noqa: E402
 
@@ -187,23 +188,24 @@ class Convert(unittest.TestCase):
             cands = [a for a in m["alerts"] if a["code"] == "hardcode-candidate"]
             self.assertIn("RADIUS", [a.get("name") for a in cands])
             self.assertIn("counter >= 30", [a.get("context") for a in cands])
-            out = root / "MWSE" / "omw" / "Demo" / "scripts" / "Demo" / "g.lua"
+            out = root / "MWSE" / "mods" / "mwsuite" / "openmw" / "Demo" / "omw" / "scripts" / "Demo" / "g.lua"
             self.assertEqual(out.read_text(encoding="utf-8"), LUA)  # byte-identical
-            self.assertTrue((root / "MWSE" / "mods" / "Demo" / "main.lua").exists())
-            self.assertTrue((root / "MWSE" / "omw" / "Demo" / "omw2mwse-manifest.json").exists())
+            self.assertTrue((root / "MWSE" / "mods" / "mwsuite" / "openmw" / "Demo" / "main.lua").exists())
+            self.assertTrue((root / "MWSE" / "mods" / "mwsuite" / "openmw" / "Demo" / "omw2mwse-manifest.json").exists())
             canon = root / "Off" / "Demo" / "OpenMW"
             self.assertEqual(tree(canon), before)  # complete original package, new layout
             self.assertFalse((root / "Off" / "OpenMW" / "Demo").exists())
             self.assertFalse((root / "Off" / "OpenMW").exists())
-            notice = "Unofficial mwsuite conversion of Demo by the original author"
-            self.assertIn("Report issues to mwsuite / dej (dejunai)", m["notice"])
+            notice = "Unofficial mwsuite conversion of Demo (original author: unknown)"
+            self.assertIn(SUPPORT_LINE, m["notice"])
             meta = (root / "Demo-metadata.toml").read_text(encoding="utf-8")
             self.assertIn(notice, meta)
-            readme = (root / "MWSE" / "omw" / "Demo" / "README-mwsuite.md").read_text(encoding="utf-8")
+            readme = (root / "MWSE" / "mods" / "mwsuite" / "openmw" / "Demo" / "README-mwsuite.md").read_text(encoding="utf-8")
             self.assertIn("Please do not send bug reports", readme)
+            self.assertIn(SUPPORT_LINE, readme)
             r = convert(root, "normal", credits={"author": "Someone", "license": "MIT", "url": "https://x"})
             meta = (root / "Demo-metadata.toml").read_text(encoding="utf-8")
-            self.assertIn("not to Someone. Original license: MIT.", meta)
+            self.assertIn("(original author: Someone). " + SUPPORT_LINE + " Original license: MIT.", meta)
             self.assertIn('"Someone (original mod)"', meta)
 
     def test_idempotent(self):
@@ -225,14 +227,14 @@ class Convert(unittest.TestCase):
             make_staged(root, sidecar=SIDECAR)
             with redirect_stderr(io.StringIO()):
                 r = convert(root, "hardcode", accept=True)
-            omw = root / "MWSE" / "omw" / "Demo"
+            omw = root / "MWSE" / "mods" / "mwsuite" / "openmw" / "Demo" / "omw"
             new = (omw / "scripts" / "Demo" / "g.lua").read_text(encoding="utf-8")
             self.assertIn('if counter >= omwcompat.cfg("COUNT_LIMIT", 30) --[[omw2mwse: hard-coded 30]] and', new)
             self.assertEqual((omw / "_original" / "scripts" / "Demo" / "g.lua").read_text(encoding="utf-8"), LUA)
-            main_lua = (root / "MWSE" / "mods" / "Demo" / "main.lua").read_text(encoding="utf-8")
+            main_lua = (root / "MWSE" / "mods" / "mwsuite" / "openmw" / "Demo" / "main.lua").read_text(encoding="utf-8")
             self.assertIn('key = "RADIUS"', main_lua)
             self.assertIn('apply = "live"', main_lua)
-            rep = (omw / "OMW2MWSE-REPORT.md").read_text(encoding="utf-8")
+            rep = (omw.parent / "OMW2MWSE-REPORT.md").read_text(encoding="utf-8")
             self.assertIn("**rewritten**", rep)
             self.assertEqual(r["mods"][0]["sidecar"], str(root / "Demo.omw2mwse.toml"))
 
@@ -263,13 +265,13 @@ class Convert(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             root = Path(t)
             make_staged(root)
-            p = root / "MWSE" / "mods" / "Demo" / "main.lua"
+            p = root / "MWSE" / "mods" / "mwsuite" / "openmw" / "Demo" / "main.lua"
             p.parent.mkdir(parents=True)
             p.write_text("-- hand written\n", encoding="utf-8")
             r = convert(root, "normal")
             self.assertEqual(r["exitCode"], EXIT_CONFLICT)
             self.assertEqual(p.read_text(encoding="utf-8"), "-- hand written\n")
-            self.assertFalse((root / "MWSE" / "omw").exists())  # nothing written
+            self.assertFalse((root / "MWSE" / "mods" / "mwsuite" / "openmw" / "Demo" / "omw").exists())  # nothing written
             r = convert(root, "normal", adopt=True)
             self.assertEqual(r["exitCode"], EXIT_OK)
             self.assertIn("omwcompat.register", p.read_text(encoding="utf-8"))
@@ -279,7 +281,7 @@ class Convert(unittest.TestCase):
             root = Path(t)
             make_staged(root)
             convert(root, "normal")
-            p = root / "MWSE" / "mods" / "Demo" / "main.lua"
+            p = root / "MWSE" / "mods" / "mwsuite" / "openmw" / "Demo" / "main.lua"
             p.write_text(p.read_text(encoding="utf-8") + "-- edit\n", encoding="utf-8")
             r = convert(root, "normal")
             self.assertEqual(r["exitCode"], EXIT_CONFLICT)
@@ -291,19 +293,19 @@ class Convert(unittest.TestCase):
             make_staged(root, sidecar=SIDECAR)
             with redirect_stderr(io.StringIO()):
                 convert(root, "hardcode", accept=True)
-            orig = root / "MWSE" / "omw" / "Demo" / "_original" / "scripts" / "Demo" / "g.lua"
+            orig = root / "MWSE" / "mods" / "mwsuite" / "openmw" / "Demo" / "omw" / "_original" / "scripts" / "Demo" / "g.lua"
             self.assertTrue(orig.exists())
             r = convert(root, "normal")
             self.assertFalse(orig.exists())
-            self.assertEqual(r["mods"][0]["files"]["MWSE/omw/Demo/_original/scripts/Demo/g.lua"], "removed")
-            self.assertEqual((root / "MWSE" / "omw" / "Demo" / "scripts" / "Demo" / "g.lua").read_text(encoding="utf-8"), LUA)
+            self.assertEqual(r["mods"][0]["files"]["MWSE/mods/mwsuite/openmw/Demo/omw/_original/scripts/Demo/g.lua"], "removed")
+            self.assertEqual((root / "MWSE" / "mods" / "mwsuite" / "openmw" / "Demo" / "omw" / "scripts" / "Demo" / "g.lua").read_text(encoding="utf-8"), LUA)
 
     def test_hardlink_not_modified_in_place(self):
         with tempfile.TemporaryDirectory() as t:
             root = Path(t)
             make_staged(root)
             convert(root, "normal")
-            p = root / "MWSE" / "mods" / "Demo" / "main.lua"
+            p = root / "MWSE" / "mods" / "mwsuite" / "openmw" / "Demo" / "main.lua"
             deployed = Path(t) / "deployed-main.lua"
             os.link(p, deployed)
             old = deployed.read_bytes()
@@ -355,6 +357,65 @@ class Convert(unittest.TestCase):
                 rc = main(["--convert-omwscripts=hardcode", str(root), "--json", "--accept-hardcode-conversions"])
             self.assertEqual(rc, 0)
             self.assertEqual(len(json.loads(buf.getvalue())["mods"][0]["rewrites"]), 3)
+
+
+class Layout(unittest.TestCase):
+    def test_support_line_matches_lua_constant(self):
+        lua = (ROOT / "runtime" / "MWSE" / "lib" / "omwcompat" / "conversions.lua").read_text(encoding="utf-8")
+        import re
+        m = re.search(r'C\.SUPPORT = ((?:"[^"]*"\s*(?:\.\.\s*)?)+)', lua)
+        self.assertIsNotNone(m)
+        self.assertEqual("".join(re.findall(r'"([^"]*)"', m.group(1))), SUPPORT_LINE)
+
+    def test_credits_detected_from_fomod_info(self):
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t)
+            make_staged(root)
+            (root / "fomod").mkdir()
+            (root / "fomod" / "info.xml").write_text(
+                "<fomod><Name>Demo Mod</Name><Author>Ann Author</Author><Website>https://x/y</Website></fomod>", encoding="utf-8")
+            r = convert(root, "normal")
+            self.assertIn("Unofficial mwsuite conversion of Demo Mod (original author: Ann Author)", r["mods"][0]["notice"])
+            main_lua = (root / "MWSE" / "mods" / "mwsuite" / "openmw" / "Demo" / "main.lua").read_text(encoding="utf-8")
+            self.assertIn('author = "Ann Author"', main_lua)
+            r = convert(root, "normal", credits={"author": "Cli Override"})  # CLI option wins
+            self.assertIn("original author: Cli Override", r["mods"][0]["notice"])
+
+    def test_hosted_main_lua_is_not_a_mwse_mod(self):
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t)
+            src = make_staged(root)
+            (src / "scripts" / "Demo" / "main.lua").write_text("return {}\n", encoding="utf-8")
+            (src / "Demo.omwscripts").write_text("GLOBAL: scripts/Demo/g.lua\nGLOBAL: scripts/Demo/main.lua\n", encoding="utf-8")
+            convert(root, "normal")
+            omw = root / "MWSE" / "mods" / "mwsuite" / "openmw" / "Demo" / "omw" / "scripts" / "Demo"
+            self.assertTrue((omw / "main.lua.omw").is_file())
+            mains = [p for p in (root / "MWSE").rglob("main.lua")]
+            self.assertEqual([p.relative_to(root).as_posix() for p in mains], ["MWSE/mods/mwsuite/openmw/Demo/main.lua"])
+            # the complete original keeps its real name under Off/
+            self.assertTrue((root / "Off" / "Demo" / "OpenMW" / "scripts" / "Demo" / "main.lua").is_file())
+
+    def test_migrates_0_2_0_layout(self):
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t)
+            make_staged(root)
+            convert(root, "normal")
+            new = root / "MWSE" / "mods" / "mwsuite" / "openmw" / "Demo"
+            # fake a 0.2.0 install of the same files in the old places
+            import json
+            old_omw, old_mod = root / "MWSE" / "omw" / "Demo", root / "MWSE" / "mods" / "Demo"
+            files = {}
+            for rel, dst in (("main.lua", old_mod / "main.lua"), ("omw/scripts/Demo/g.lua", old_omw / "scripts" / "Demo" / "g.lua")):
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                dst.write_bytes((new / rel).read_bytes())
+                from omw2mwse.build import sha256b
+                files[dst.relative_to(root).as_posix()] = sha256b(dst.read_bytes())
+            (old_omw / "omw2mwse-manifest.json").write_text(json.dumps({"files": files}), encoding="utf-8")
+            r = convert(root, "normal")
+            self.assertFalse(old_mod.exists())
+            self.assertFalse((old_omw / "scripts").exists())
+            self.assertTrue((new / "main.lua").exists())
+            self.assertEqual(r["mods"][0]["files"]["MWSE/mods/Demo/main.lua"], "removed")
 
 
 class ScanSettings(unittest.TestCase):

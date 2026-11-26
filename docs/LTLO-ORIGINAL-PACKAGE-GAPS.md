@@ -39,7 +39,7 @@ record-path limit.
 - Anything else that was only in the Nexus zip and never copied into the
   reference trees or the hand-port backup.
 
-The conversion loads hosted Lua from `MWSE/omw/LeaveTheLightsOff/`, not from
+The conversion loads hosted Lua from `MWSE/mods/mwsuite/openmw/LeaveTheLightsOff/omw/`, not from
 `Off/`. The gaps above do not stop Leave The Lights Off from running on MWSE
 through omwcompat. License of the original is still unknown; notices say to see
 the Nexus Mods permissions of the original (mod 57510).

@@ -1,3 +1,5 @@
+> **Superseded by 0.2.1** (new layout under MWSE/mods/mwsuite/openmw/, one "MW Conversions" MCM). Kept as the record of the 0.2.0 delta; use the 0.2.1 7z instead.
+
 # Install delta 0.2: LTLO with MCM (staged on the box only, NOT applied)
 
 Nothing here has been run on Dej's PC. Every write below needs Dej's go-ahead first.
