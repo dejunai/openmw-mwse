@@ -11,7 +11,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import __version__
+from . import REQUIRES_PYTHON, __version__
 from . import sidecar as SC
 from . import warn
 from .build import BuildError
@@ -89,7 +89,7 @@ def cmd_convert(a) -> int:
                     dry_run=a.dry_run, adopt=a.adopt_existing, with_runtime=not a.no_runtime,
                     meshes_from=[Path(a.meshes_from)] if a.meshes_from else None, title=a.title, credits=_credits(a))
     except (BuildError, SC.SidecarError) as e:
-        r = {"tool": "omw2mwse", "version": __version__, "command": "convert", "mode": a.mode, "dir": str(a.dir),
+        r = {"tool": "omw2mwse", "version": __version__, "requiresPython": REQUIRES_PYTHON, "command": "convert", "mode": a.mode, "dir": str(a.dir),
              "mods": [], "alerts": [{"level": "error", "code": "error", "message": str(e)}], "changed": False,
              "exitCode": EXIT_ERROR}
     if a.json:

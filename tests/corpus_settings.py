@@ -11,7 +11,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
-from omw2mwse.convert import mod_name_for  # noqa: E402
+from omw2mwse.build import mod_name_for  # noqa: E402
 from omw2mwse.package import package  # noqa: E402
 from omw2mwse.scan import scan_mod  # noqa: E402
 

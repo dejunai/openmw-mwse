@@ -85,6 +85,55 @@ OFF_SKIP_FILES = frozenset({
 })
 
 
+MOD_NAME_FALLBACK = "OpenMWMod"
+
+
+def sanitize_mod_name(stem: str) -> str:
+    """Remove every character outside [A-Za-z0-9_-]; MOD_NAME_FALLBACK when nothing is left."""
+    return re.sub(r"[^A-Za-z0-9_\-]", "", stem or "") or MOD_NAME_FALLBACK
+
+
+def mod_name_for(src: Path) -> str:
+    """The mod id: the stem of the first *.omwscripts file directly in src, sanitised.
+
+    Order: file names sorted by os.path.normcase (case-insensitive on Windows, where tidy
+    runs; ordinal elsewhere), exactly as conflict-tools' mwdialog_offlayout._first_stem.
+    Falls back to src's folder name, then to MOD_NAME_FALLBACK. This is the <plugin> of
+    Off/<plugin>/OpenMW/ (docs/OFF-LAYOUT.md in conflict-tools) and, unless --name is
+    given, the MWSE/mods/mwsuite/openmw/<mod> folder name.
+    """
+    src = Path(src)
+    try:
+        names = [e for e in os.listdir(src) if e.lower().endswith(".omwscripts") and (src / e).is_file()]
+    except OSError:
+        names = []
+    names.sort(key=os.path.normcase)
+    stem = os.path.splitext(names[0])[0] if names else src.name
+    return sanitize_mod_name(stem)
+
+
+# Longest absolute path Windows opens without long-path support (MAX_PATH 260 minus the
+# terminating NUL); the same limit as conflict-tools' tidy (docs/OFF-LAYOUT.md).
+MAX_PATH_CHARS = 259
+MAX_PATH_LIST = "max_path_too_long.txt"
+
+
+def abs_path_len(abs_root: str, rel: str) -> int:
+    """Length of abs_root joined with rel as Windows spells it (one separator per level)."""
+    return len(abs_root.rstrip("/\\")) + 1 + len(rel.replace("\\", "/").strip("/"))
+
+
+def max_path_list_text(rels) -> str:
+    """Off/<plugin>/max_path_too_long.txt body: relative paths with backslashes, unique,
+    sorted case-insensitively, one per line (the format conflict-tools' tidy writes)."""
+    seen: dict[str, str] = {}
+    for r in rels:
+        r = r.replace("/", "\\").strip("\\")
+        if r:
+            seen.setdefault(r.lower(), r)
+    return "".join(seen[k] + "\n" for k in sorted(seen))
+
+
 def original_off_prefix(name: str, data_prefix: str = "") -> str:
     """Canonical location of the preserved original OpenMW package inside a Data Files root."""
     d = (data_prefix.rstrip("/") + "/") if data_prefix else ""
@@ -140,8 +189,14 @@ class Writer:
     Existing files that are not ours and differ are conflicts unless adopt=True.
     """
 
-    def __init__(self, root: Path, previous: dict | None = None, adopt: bool = False):
+    def __init__(self, root: Path, previous: dict | None = None, adopt: bool = False,
+                 max_path: int | None = None):
         self.root = Path(root)
+        # Windows MAX_PATH: with max_path set (convert uses MAX_PATH_CHARS), a file whose
+        # absolute destination is longer is not planned; it is listed in too_long instead.
+        self.max_path = max_path
+        self._abs_root = os.path.abspath(str(self.root))
+        self.too_long: list[str] = []
         self.previous = previous or {}
         self.adopt = adopt
         self.plan: dict[str, bytes] = {}
@@ -151,6 +206,10 @@ class Writer:
 
     def put(self, rel: str, data: bytes) -> None:
         rel = rel.replace("\\", "/")
+        if self.max_path is not None and abs_path_len(self._abs_root, rel) > self.max_path:
+            if rel not in self.too_long:
+                self.too_long.append(rel)
+            return
         if rel in self.plan and self.plan[rel] != data:
             raise BuildError(f"two different outputs for {rel}")
         self.plan[rel] = data
@@ -605,7 +664,8 @@ class BuildResult:
 def build(src: Path, writer: Writer, name: str, *, data_prefix: str = "", slug: str | None = None,
           with_runtime: bool = True, meshes_from: list[Path] | None = None, mode: str = "normal",
           sidecar: dict | None = None, confirm=None, manifest: dict | None = None,
-          title: str | None = None, credits: dict | None = None, meta_dirs: list | None = None) -> BuildResult:
+          title: str | None = None, credits: dict | None = None, meta_dirs: list | None = None,
+          off_name: str | None = None) -> BuildResult:
     """Plan all outputs for one mod into writer (paths relative to writer.root, under data_prefix).
 
     confirm(plan) -> accepted conversions (raises warn.Refused); required when mode == 'hardcode'.
@@ -620,7 +680,7 @@ def build(src: Path, writer: Writer, name: str, *, data_prefix: str = "", slug: 
     D = (data_prefix.rstrip("/") + "/") if data_prefix else ""
     mdir = mod_dir(name, data_prefix)
     omw = mdir + "omw/"
-    off = original_off_prefix(name, data_prefix)
+    off = original_off_prefix(off_name or mod_name_for(src), data_prefix)
     res = BuildResult(name=name, slug=slug, source=str(src), scan=scan, writer=writer, omw_rel=omw, off_rel=off)
     res.mod_rel = mdir
 
@@ -633,7 +693,8 @@ def build(src: Path, writer: Writer, name: str, *, data_prefix: str = "", slug: 
     for p, rel in originals:
         data = p.read_bytes()
         writer.put(off + rel, data)
-        res.off_copied.append(rel)
+        if (off + rel) in writer.plan:          # not when its Off/ path is over MAX_PATH
+            res.off_copied.append(rel)
         if is_plugin_path(rel):
             plugin_data[rel.replace("\\", "/")] = data
             continue

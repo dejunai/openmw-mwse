@@ -321,6 +321,158 @@ class OptOutTests(unittest.TestCase):
             self.assertNotIn("reason", r["mods"][0])
 
 
+from omw2mwse.build import MAX_PATH_CHARS, MAX_PATH_LIST, MOD_NAME_FALLBACK, mod_name_for  # noqa: E402
+
+MANIFEST_REL = "MWSE/mods/mwsuite/openmw/{}/omw2mwse-manifest.json"
+
+
+def _load_manifest_of(root: Path, mod: str) -> dict:
+    import json
+    hits = list(root.glob(f"MWSE/mods/mwsuite/openmw/{mod}/*manifest*.json"))
+    assert len(hits) == 1, hits
+    return json.loads(hits[0].read_text(encoding="utf-8")), hits[0].relative_to(root).as_posix()
+
+
+def _files(root: Path) -> list:
+    return sorted(p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file())
+
+
+def _long_rel(prefix: str, length: int) -> str:
+    """A relative path of exactly `length` characters made of folders of at most 100."""
+    parts, left = [prefix.rstrip("/")], length - len(prefix.rstrip("/"))
+    while left > 0:
+        left -= 1                              # the separator
+        n = min(100, left)
+        if left - n in (1,):                   # never leave a 0-character last part
+            n -= 1
+        parts.append("d" * n)
+        left -= n
+    rel = "/".join(parts)
+    assert len(rel) == length, (len(rel), length)
+    return rel
+
+
+class OffLayoutTests(unittest.TestCase):
+    """Conflict-tools' unified Off layout (docs/OFF-LAYOUT.md there): one owner name, a
+    complete manifest, and the MAX_PATH list."""
+
+    def test_mod_name_for_first_omwscripts_by_normcase(self):
+        with tempfile.TemporaryDirectory() as t:
+            d = Path(t) / "Some Folder!"
+            d.mkdir()
+            self.assertEqual(mod_name_for(d), "SomeFolder")           # no .omwscripts: the folder name
+            (d / "dir.omwscripts").mkdir()                             # folders do not count
+            self.assertEqual(mod_name_for(d), "SomeFolder")
+            for n in ("zeta.omwscripts", "Beta mod.OMWSCRIPTS", "alpha (v2).omwscripts"):
+                (d / n).write_text("GLOBAL: scripts/x.lua\n", encoding="utf-8")
+            first = sorted(["zeta.omwscripts", "Beta mod.OMWSCRIPTS", "alpha (v2).omwscripts"], key=os.path.normcase)[0]
+            want = "".join(c for c in os.path.splitext(first)[0] if c.isalnum() or c in "_-")
+            self.assertEqual(mod_name_for(d), want)
+            (d / "sub").mkdir()
+            (d / "sub" / "AAA.omwscripts").write_text("", encoding="utf-8")   # only the folder itself counts
+            self.assertEqual(mod_name_for(d), want)
+            e = Path(t) / "!!!"
+            e.mkdir()
+            self.assertEqual(mod_name_for(e), MOD_NAME_FALLBACK)
+            (e / "().omwscripts").write_text("", encoding="utf-8")
+            self.assertEqual(mod_name_for(e), MOD_NAME_FALLBACK)
+
+    def test_name_override_keeps_off_owner(self):
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t)
+            _make_mod(root, script_src=GLOBAL_SRC)
+            r = convert_staged(root, "normal", name="Renamed")
+            m = r["mods"][0]
+            self.assertEqual(m["off"], "Off/M/OpenMW")
+            self.assertTrue((root / "Off/M/OpenMW/M.omwscripts").is_file())
+            self.assertTrue((root / "MWSE/mods/mwsuite/openmw/Renamed").is_dir())
+            self.assertEqual(r["requiresPython"], ">=3.9")
+
+    def test_manifest_lists_every_placed_file(self):
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t)
+            _make_mod(root, script_src=GLOBAL_SRC)
+            (root / "M.omwaddon").write_bytes(b"TES3" + b"\0" * 60)
+            (root / "optional").mkdir()
+            (root / "optional" / "Extra.omwaddon").write_bytes(b"TES3" + b"\1" * 60)
+            (root / "meshes" / "m").mkdir(parents=True)
+            (root / "meshes" / "m" / "x.nif").write_bytes(b"NIF")
+            (root / "l10n" / "M").mkdir(parents=True)
+            (root / "l10n" / "M" / "en.yaml").write_text("k: v\n", encoding="utf-8")
+            (root / "readme.txt").write_text("hi\n", encoding="utf-8")
+            r = convert_staged(root, "normal")
+            self.assertEqual(r["exitCode"], 0, r)
+            man, man_rel = _load_manifest_of(root, "M")
+            listed = set(man["files"]) | {p["path"] for p in man["plugins"] if p.get("path")}
+            on_disk = set(_files(root)) - {man_rel}
+            self.assertEqual(sorted(on_disk - listed), [])            # every placed file is in the manifest
+            self.assertEqual(sorted(set(man["files"]) - on_disk), [])  # and nothing listed is missing
+            for p in man["plugins"]:
+                self.assertIn(p["path"], man["files"])
+            placements = {p["placement"] for p in man["plugins"]}
+            self.assertIn("extras", placements)
+            self.assertTrue(any(k.startswith("Off/M/OpenMW/") for k in man["files"]))
+            self.assertTrue(any(k.startswith("Extras/") for k in man["files"]))
+
+    def _staged_with_budget(self, t: str) -> Path:
+        root = Path(t) / "staged"
+        root.mkdir()
+        self.assertLess(len(os.path.abspath(root)), 120, "temp dir too deep for this test")
+        return root
+
+    def test_max_path_original_stays_and_is_listed(self):
+        with tempfile.TemporaryDirectory() as t:
+            root = self._staged_with_budget(t)
+            _make_mod(root, script_src=GLOBAL_SRC)
+            base = len(os.path.abspath(root)) + 1
+            # fits where it is, too long once under Off/M/OpenMW/ (13 more characters)
+            rel = _long_rel("notes", MAX_PATH_CHARS - base - 5) + ".txt"
+            (root / rel).parent.mkdir(parents=True)
+            (root / rel).write_text("x\n", encoding="utf-8")
+            self.assertLessEqual(base + len(rel), MAX_PATH_CHARS)
+            self.assertGreater(base + len("Off/M/OpenMW/") + len(rel), MAX_PATH_CHARS)
+            r = convert_staged(root, "normal")
+            m = r["mods"][0]
+            self.assertEqual(r["exitCode"], 0, r)
+            self.assertEqual(m["verdict"], "ready")
+            self.assertEqual(m["maxPathTooLong"], [rel])
+            self.assertTrue(any(a["code"] == "max-path-too-long" for a in m["alerts"]))
+            self.assertTrue((root / rel).is_file())                      # never moved
+            self.assertFalse((root / "scripts/M/m.lua").exists())        # the rest moved
+            lst = root / "Off" / "M" / MAX_PATH_LIST
+            self.assertEqual(lst.read_bytes(), (rel.replace("/", "\\") + "\n").encode("utf-8"))
+            man, man_rel = _load_manifest_of(root, "M")
+            self.assertNotIn("Off/M/OpenMW/" + rel, man["files"])
+            self.assertNotIn(f"Off/M/{MAX_PATH_LIST}", man["files"])     # tidy refreshes it too
+            # second run: same list, nothing rewritten
+            before = lst.stat().st_mtime_ns
+            r2 = convert_staged(root, "normal")
+            self.assertFalse(r2["changed"], r2)
+            self.assertEqual(lst.stat().st_mtime_ns, before)
+            # the long file goes away: the list is removed
+            (root / rel).unlink()
+            convert_staged(root, "normal")
+            self.assertFalse(lst.exists())
+
+    def test_max_path_hosted_script_blocks(self):
+        with tempfile.TemporaryDirectory() as t:
+            root = self._staged_with_budget(t)
+            base = len(os.path.abspath(root)) + 1
+            rel = _long_rel("scripts/M", MAX_PATH_CHARS - base - 10) + ".lua"
+            (root / rel).parent.mkdir(parents=True)
+            (root / rel).write_text(GLOBAL_SRC, encoding="utf-8")
+            (root / "M.omwscripts").write_text(f"GLOBAL: {rel}\n", encoding="utf-8")
+            r = convert_staged(root, "normal")
+            m = r["mods"][0]
+            self.assertEqual(m["verdict"], "blocked")
+            self.assertEqual(m["reason"]["code"], "max-path-too-long")
+            self.assertIn(rel, m["maxPathTooLong"])
+            self.assertTrue((root / rel).is_file())
+            listed = (root / "Off" / "M" / MAX_PATH_LIST).read_text(encoding="utf-8").splitlines()
+            self.assertIn(rel.replace("/", "\\"), listed)
+            self.assertTrue(any(x.startswith("MWSE\\") for x in listed))
+
+
 class PackageTests(unittest.TestCase):
     def test_slug_and_alias(self):
         self.assertEqual(default_slug("LeaveTheLightsOff"), "ltlo")

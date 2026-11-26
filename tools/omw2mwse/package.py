@@ -6,7 +6,7 @@ import shutil
 from pathlib import Path
 
 from . import __version__
-from .build import (BuildError, Writer, build, default_slug, lua_str, mesh_alias, render_main,  # noqa: F401 (re-exported)
+from .build import (BuildError, Writer, build, default_slug, lua_str, mesh_alias, mod_name_for, render_main,  # noqa: F401 (re-exported)
                     render_metadata, sha256b, text_bytes)
 from .optout import find_opt_out
 from .scan import load_manifest
@@ -32,7 +32,7 @@ def package(src: Path, out: Path, name: str | None = None, slug: str | None = No
     if opt:
         raise PackageError(opt["message"])
     manifest = manifest or load_manifest()
-    name = name or src.name
+    name = name or mod_name_for(src)
     if out.exists():
         if not force:
             raise PackageError(f"{out} exists (use --force to replace a previous omw2mwse output)")

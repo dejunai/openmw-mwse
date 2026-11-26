@@ -19,14 +19,13 @@ from __future__ import annotations
 
 import json
 import os
-import re
 from pathlib import Path
 
-from . import __version__
+from . import REQUIRES_PYTHON, __version__
 from . import sidecar as SC
 from . import warn
-from .build import (MANIFEST_NAME, BuildError, Writer, build, is_game_asset, iter_original_files, mod_dir,
-                    renamed_plugin,
+from .build import (MANIFEST_NAME, MAX_PATH_CHARS, MAX_PATH_LIST, BuildError, Writer, abs_path_len, max_path_list_text, build, is_game_asset, iter_original_files, mod_dir,
+                    mod_name_for, renamed_plugin,
                     notice_text, original_off_prefix, sha256b, text_bytes)
 from .optout import find_opt_out
 from .scan import load_manifest
@@ -151,10 +150,56 @@ def relocate_original(src: Path, staged: Path, name: str, keep_root=None) -> lis
     return removed
 
 
-def mod_name_for(src: Path) -> str:
-    oms = sorted(src.glob("*.omwscripts"))
-    base = oms[0].stem if oms else src.name
-    return re.sub(r"[^A-Za-z0-9_\-]", "", base) or "OpenMWMod"
+# mod_name_for lives in build.py (one helper for Off/<plugin>/ and the mod folder)
+
+
+def max_path_offenders(w: Writer, staged: Path, src: Path, off_prefix: str) -> list[str]:
+    """Staged-relative paths for Off/<plugin>/max_path_too_long.txt from the files w did not write.
+
+    As in conflict-tools' tidy, a file that stays where it is is listed by its own path: an
+    original whose Off/<plugin>/OpenMW/ copy would be too long stays in the source folder
+    (relocate_original only removes what Off/ holds). A generated or installed file that
+    could not be written is listed by the path it would have had.
+    """
+    out = []
+    try:
+        src_rel = src.resolve().relative_to(staged.resolve()).as_posix()
+    except ValueError:
+        src_rel = None                      # external --source: its files are not ours to list
+    for rel in w.too_long:
+        if rel.lower().startswith(off_prefix.lower()):
+            if src_rel is None:
+                continue
+            orig = rel[len(off_prefix):]
+            out.append(f"{src_rel}/{orig}" if src_rel not in ("", ".") else orig)
+        else:
+            out.append(rel)
+    return out
+
+
+def write_max_path_list(staged: Path, off_rel: str, offenders: list[str], off_prefix: str) -> bool:
+    """Refresh Off/<plugin>/max_path_too_long.txt with tidy's rule: this run's offenders plus
+    earlier lines whose file is still there and still too long (its own path, or its copy
+    under off_prefix, the move it was left out of); removed when empty; written only when
+    the text changes. Returns True if the file was written or removed."""
+    path = staged / off_rel / MAX_PATH_LIST
+    root = os.path.abspath(str(staged))
+    old = []
+    if path.is_file():
+        old = [ln.strip() for ln in path.read_text(encoding="utf-8", errors="replace").splitlines() if ln.strip()]
+    keep = [r for r in old if (staged / r.replace("\\", "/")).is_file()
+            and max(abs_path_len(root, r), abs_path_len(root, off_prefix + r)) > MAX_PATH_CHARS]
+    text = max_path_list_text(list(offenders) + keep)
+    if not text:
+        if path.is_file():
+            path.unlink()
+            return True
+        return False
+    if path.is_file() and path.read_text(encoding="utf-8", errors="replace").replace("\r\n", "\n") == text:
+        return False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(text.encode("utf-8"))
+    return True
 
 
 def _tree_sig(p: Path) -> str:
@@ -174,7 +219,7 @@ def convert(staged: Path, mode: str = "normal", *, name: str | None = None, sour
     if mode not in MODES:
         raise BuildError(f"mode must be one of {MODES}")
     staged = Path(staged).resolve()
-    result = {"tool": "omw2mwse", "version": __version__, "command": "convert", "mode": mode, "dir": str(staged),
+    result = {"tool": "omw2mwse", "version": __version__, "requiresPython": REQUIRES_PYTHON, "command": "convert", "mode": mode, "dir": str(staged),
               "dryRun": dry_run, "mods": [], "alerts": [], "changed": False, "exitCode": EXIT_OK}
     if not staged.is_dir():
         raise BuildError(f"{staged} is not a directory")
@@ -189,7 +234,9 @@ def convert(staged: Path, mode: str = "normal", *, name: str | None = None, sour
     for s in sources:
         groups.setdefault(name or mod_name_for(s), []).append(s)
     for modname, srcs in groups.items():
-        src = prefer_source(srcs, staged, modname)
+        offname = mod_name_for(srcs[0])  # Off/<plugin>/ always follows the tidy rule, even with --name
+        src = prefer_source(srcs, staged, offname)
+        offname = mod_name_for(src)
         sigs = {_tree_sig(s) for s in srcs}
         if len(sigs) > 1:
             raise BuildError(f"{modname}: {len(srcs)} different source folders ({', '.join(str(s.relative_to(staged)) for s in srcs)}); "
@@ -222,7 +269,7 @@ def convert(staged: Path, mode: str = "normal", *, name: str | None = None, sour
                     prev.update(json.loads((staged / rel_m).read_text(encoding="utf-8")).get("files", {}))
                 except (OSError, ValueError):
                     result["alerts"].append({"level": "warning", "code": "manifest-unreadable", "message": rel_m})
-        w = Writer(staged, previous=prev, adopt=adopt)
+        w = Writer(staged, previous=prev, adopt=adopt, max_path=MAX_PATH_CHARS)
         sc = None
         if mode == "hardcode":
             sp = Path(sidecar_path) if sidecar_path else SC.find(modname, staged, src)
@@ -243,7 +290,7 @@ def convert(staged: Path, mode: str = "normal", *, name: str | None = None, sour
         mesh_dirs = list(meshes_from or []) + [staged / "meshes", src / "meshes"]
         entry = {"name": modname, "source": str(src.relative_to(staged)) if staged in src.parents else str(src)}
         try:
-            res = build(src, w, modname, slug=None, with_runtime=with_runtime, meshes_from=mesh_dirs, mode=mode,
+            res = build(src, w, modname, off_name=offname, slug=None, with_runtime=with_runtime, meshes_from=mesh_dirs, mode=mode,
                         sidecar=sc, confirm=confirm, manifest=manifest, title=title, credits=credits,
                         meta_dirs=[staged])
         except warn.Refused as e:
@@ -255,7 +302,7 @@ def convert(staged: Path, mode: str = "normal", *, name: str | None = None, sour
         w.check()
         ok, total = res.scan.coverage()
         so, st = res.scan.settings_coverage()
-        entry["off"] = original_off_prefix(modname).rstrip("/")
+        entry["off"] = original_off_prefix(offname).rstrip("/")
         entry.update({
             "status": "ok", "verdict": res.scan.verdict, "coverage": [ok, total],
             "settings": {"groups": [g["key"] for g in res.scan.settings.get("groups", [])], "coverage": [so, st],
@@ -269,6 +316,20 @@ def convert(staged: Path, mode: str = "normal", *, name: str | None = None, sour
             "notice": notice_text(res.credits),
             "plugins": res.plugins,
         })
+        owner_rel = f"Off/{offname}"
+        too_long = max_path_offenders(w, staged, src, original_off_prefix(offname))
+        if too_long:
+            entry["maxPathTooLong"] = too_long
+            for rel in w.too_long:
+                entry["alerts"].append({"level": "error", "code": "max-path-too-long", "path": rel,
+                                        "message": f"{rel} not written: its full path would be over {MAX_PATH_CHARS} "
+                                                   f"characters (Windows MAX_PATH); listed in {owner_rel}/{MAX_PATH_LIST}"})
+            hosted = [r for r in w.too_long if r.lower().startswith("mwse/")]
+            if hosted:
+                entry["verdict"] = "blocked"
+                entry["reason"] = {"code": "max-path-too-long", "file": hosted[0],
+                                   "message": f"{len(hosted)} MWSE file(s) could not be written because their full path "
+                                              f"is over {MAX_PATH_CHARS} characters; move the staging folder to a shorter path"}
         if "text" in warning_box:
             entry["warning"] = warning_box["text"]
         if res.accepted:
@@ -289,14 +350,14 @@ def convert(staged: Path, mode: str = "normal", *, name: str | None = None, sour
                                         "message": f"MWSE/mods/{modname}/main.lua is not an omw2mwse file and would load "
                                                    "alongside the converted mod; remove it if it is an older build or hand port"})
             keep_root = [pl["name"] for pl in res.plugins if pl.get("placement") == "root"]
-            moved = relocate_original(src, staged, modname, keep_root=keep_root)
+            moved = relocate_original(src, staged, offname, keep_root=keep_root)
             if moved:
                 previous_src = entry["source"]
-                entry["source"] = str(canonical_source(staged, modname).relative_to(staged))
+                entry["source"] = str(canonical_source(staged, offname).relative_to(staged))
                 entry["relocatedFrom"] = previous_src
                 entry["relocated"] = moved
         else:
-            dest = canonical_source(staged, modname)
+            dest = canonical_source(staged, offname)
             try:
                 if src.resolve() != dest.resolve() and (staged.resolve() in src.resolve().parents or src.resolve() == staged.resolve()):
                     entry["willRelocateTo"] = str(dest.relative_to(staged))
@@ -310,7 +371,8 @@ def convert(staged: Path, mode: str = "normal", *, name: str | None = None, sour
         if not dry_run and man_changed:
             mp.parent.mkdir(parents=True, exist_ok=True)
             mp.write_bytes(man_bytes)
-        entry["changed"] = w.changed() or man_changed or bool(entry.get("relocated"))
+        list_changed = False if dry_run else write_max_path_list(staged, f"Off/{offname}", too_long, original_off_prefix(offname))
+        entry["changed"] = w.changed() or man_changed or bool(entry.get("relocated")) or list_changed
         result["changed"] = result["changed"] or entry["changed"]
         result["mods"].append(entry)
     return result

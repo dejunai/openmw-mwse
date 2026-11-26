@@ -47,8 +47,9 @@ omw2mwse --convert-omwscripts[=normal|hardcode] <staged-mod-dir> --json [options
 
 is the same as `omw2mwse convert <staged-mod-dir> --mode normal|hardcode --json`. A bare
 `--convert-omwscripts` means `normal`. Library use: `omw2mwse.convert.convert(path, mode, ...)`
-returns the same dict that `--json` prints. Python 3.11+ stdlib only (tomllib); tested on 3.13,
-written for 3.15.
+returns the same dict that `--json` prints. Python 3.9+ stdlib only (`tomllib` when present,
+else a small built-in reader for the TOML omw2mwse reads); tested on 3.9 and 3.15. The JSON
+result carries `"requiresPython": ">=3.9"`.
 
 `<staged-mod-dir>` is a Data Files root (a Vortex staging mod folder). omw2mwse finds every
 folder below it that holds a `.omwscripts` file, outside `MWSE/` (for example a legacy
@@ -94,6 +95,34 @@ are never written under `Off/`.
 | `Extras/<Mod>/...` | plugins that shipped in a package subfolder (not auto-enabled; tidy does not look inside `Extras/`) |
 | `meshes/omwc/<slug>/<hash>.nif` | short aliases for mesh paths longer than 31 chars, copied from `meshes/` in the folder |
 | `<Mod>-metadata.toml` | MWSE metadata with the notice in its description |
+
+### Unified Off layout (conflict-tools `docs/OFF-LAYOUT.md`)
+
+- **Owner name.** `<plugin>` in `Off/<plugin>/OpenMW/` is always `mod_name_for(source)`
+  (`tools/omw2mwse/build.py`): the stem of the first `*.omwscripts` directly in the package
+  folder, names sorted with `os.path.normcase` (case-insensitive on Windows), everything but
+  `A-Za-z0-9_-` removed, falling back to the folder name and then `OpenMWMod`. This is
+  tidy's `computed_owner` for an OpenMW-only mod. `--name` changes only the
+  `MWSE/mods/mwsuite/openmw/<Mod>/` folder, never the Off owner. Once the converter has
+  written `Off/<plugin>/OpenMW/`, that folder is the mod's only canonical owner, so tidy keeps
+  it even if the mod also ships a root `.esp` (which tidy would otherwise rank first).
+- **Manifest coverage.** Every file a run places is a key of the manifest's `files`
+  (originals under `Off/`, root assets, installed plugins, `Extras/`, `MWSE/`, metadata), and
+  every `plugins[].path` is one of those keys. Exceptions: the manifest itself and the
+  MAX_PATH list below (tidy rewrites that list too, so it is not hashed).
+- **MAX_PATH.** A file whose full destination path would be over 259 characters is not
+  written. An original whose `Off/<plugin>/OpenMW/` copy would be too long stays where it is
+  (it is not removed from its old place). Both are listed in `Off/<plugin>/max_path_too_long.txt`
+  with tidy's format (relative to the staged folder, backslashes, unique, case-insensitively
+  sorted, UTF-8): an original by its current path, a generated file by the path it would have
+  had. The list is this run's offenders plus earlier lines whose file still exists and is still
+  too long to move; it is rewritten only when its text changes and removed when empty. The JSON
+  entry gets `maxPathTooLong` (the listed paths) and one `max-path-too-long` error alert per
+  file. If a file under `MWSE/` could not be written, the mod cannot run: `verdict` is
+  `blocked` with `reason.code` `max-path-too-long` (move the staging folder to a shorter path).
+  Note: tidy's own refresh keeps only lines whose file exists and whose own path is too long,
+  so it drops the converter's lines for generated files and for originals that only failed
+  because of their Off copy; the converter adds them back on its next run.
 
 Nothing outside `<staged-mod-dir>` (or the `package` output folder) is written:
 **never point convert at the live game's Data Files**; Vortex deploys the result.
