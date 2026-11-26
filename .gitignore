@@ -6,3 +6,7 @@
 __pycache__/
 *.pyc
 /tests/tmp/
+
+# generated Vortex archive (contains third-party meshes; rebuild with scripts/package-ltlo-archive.sh)
+/dist-archives/
+/build-ltlo-archive/
