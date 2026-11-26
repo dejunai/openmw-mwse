@@ -45,8 +45,9 @@ OMW2MWSE-REPORT.md                           scan + file list with hashes
 
 ## Status
 
-The project is an MVP. Only GLOBAL scripts are hosted. Player, local, menu and UI scripts
-are reported by `scan` as blockers. Docs:
+The project is an MVP. GLOBAL scripts and object-attached scripts (NPC, CREATURE, ACTOR,
+CONTAINER, DOOR, LIGHT, ACTIVATOR) are hosted. Player, custom, menu and UI scripts are reported
+by `scan` as blockers. Docs:
 - [docs/RUNTIME.md](docs/RUNTIME.md) covers how the emulation works and the four object-lifecycle rules.
 - [docs/COVERAGE.md](docs/COVERAGE.md) covers the test corpus.
 - [docs/GAPS.md](docs/GAPS.md) lists the known differences.

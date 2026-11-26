@@ -1,4 +1,5 @@
--- omwcompat.runtime: hosts unmodified OpenMW GLOBAL Lua scripts inside MWSE.
+-- omwcompat.runtime: hosts unmodified OpenMW GLOBAL and object-attached (NPC, CREATURE,
+-- ACTOR, CONTAINER, DOOR, LIGHT, ACTIVATOR) Lua scripts inside MWSE.
 -- See DESIGN.md (hybrid architecture, runtime first) and docs/RUNTIME.md.
 -- MIT, Copyright (c) 2026 dej (dejunai). Built with Grok Bot.
 local util = require("omwcompat.util")
@@ -6,10 +7,13 @@ local serial = require("omwcompat.serial")
 local objects = require("omwcompat.objects")
 local settings = require("omwcompat.settings")
 local conversions = require("omwcompat.conversions")
+local actors = require("omwcompat.actors")
 
-local RT = { VERSION = "0.2.2", API_REVISION = 70, PROBE_API_REVISION = 100 }
+local RT = { VERSION = "0.3.0", API_REVISION = 70, PROBE_API_REVISION = 100 }
+local LOCAL_FLAG_NAMES
 objects.init(RT)
 settings.init(RT)
+actors.init(RT, objects)
 
 local mods = {}            -- registered mods, in registration order
 local state = {
@@ -25,6 +29,7 @@ local state = {
     idCounter = 0,
     meshmap = {},          -- normalized long model path -> short alias (R4)
     tombs = {},            -- content ref id -> true while removed by a script (R1)
+    localActive = {},      -- object id -> { key, self, scripts } for objects with local scripts in an active cell
 }
 RT._state = state
 
@@ -87,7 +92,9 @@ local function tickTimers()
     if #timers == 0 then return end
     local due, keep = {}, {}
     for _, t in ipairs(timers) do
-        if now(t.kind) >= t.at then due[#due + 1] = t else keep[#keep + 1] = t end
+        if t.script and t.script.dead then
+            -- local script detached: its timers were saved with it or dropped
+        elseif now(t.kind) >= t.at then due[#due + 1] = t else keep[#keep + 1] = t end
     end
     if #due == 0 then return end
     timers = keep
@@ -139,7 +146,34 @@ end
 
 ---------------------------------------------------------------- events (sendGlobalEvent)
 local eventQueue = {}
+local localEventQueue = {}
+local function deliverLocalEvents()
+    if #localEventQueue == 0 then return end
+    local q = localEventQueue
+    localEventQueue = {}
+    for _, ev in ipairs(q) do
+        local inst = state.localActive[ev.key]
+        if not inst then
+            RT.log("event %s for inactive object %s dropped", ev.name, tostring(ev.key))
+        else
+            for i = #inst.scripts, 1, -1 do
+                local S = inst.scripts[i]
+                local h = S.eventHandlers and S.eventHandlers[ev.name]
+                if h then
+                    local ok, r = safecall(S.path .. " event " .. ev.name, h, ev.data)
+                    if ok and r == false then break end
+                end
+            end
+        end
+    end
+end
+function RT.sendLocalEvent(obj, name, data)
+    local key = rawget(obj, "_id")
+    if not key or rawget(obj, "_limbo") then return end
+    localEventQueue[#localEventQueue + 1] = { key = key, name = name, data = data }
+end
 local function deliverEvents()
+    deliverLocalEvents()
     if #eventQueue == 0 then return end
     local q = eventQueue
     eventQueue = {}
@@ -313,25 +347,56 @@ local function buildModules(m, S)
         daysInWeek = 7,
     })
 
+    local function mapFilter(arr, f)
+        local vals, scores = {}, {}
+        for i = 1, #arr do
+            local v = arr[i]
+            local sc = f(v)
+            if sc then vals[#vals + 1] = v; scores[#vals] = sc end
+        end
+        return vals, scores
+    end
     local auxUtil = unsupportedProxy("openmw_aux.util", {
         deepToString = function(v, d)
             local ok, s = pcall(serial.encode, v, function(o) return o.id end)
             return ok and s or tostring(v)
         end,
+        -- documented OpenMW contracts: mapFilter/mapFilterSort -> (values, scores) with
+        -- falsy scores dropped (sorted ascending for mapFilterSort); findMinScore ->
+        -- (element, score, index); callEventHandlers(nil) -> false.
         callEventHandlers = function(handlers, ...)
+            if not handlers then return false end
             for i = #handlers, 1, -1 do if handlers[i](...) == false then return true end end
             return false
         end,
-        mapFilter = function(arr, f) local o = {}; for _, v in ipairs(arr) do if f(v) then o[#o + 1] = v end end; return o end,
-        mapFilterSort = function(arr, f) local o = {}; for _, v in ipairs(arr) do local s = f(v); if s then o[#o + 1] = v end end; return o end,
+        callMultipleEventHandlers = function(lists, ...)
+            for _, handlers in ipairs(lists) do
+                for i = #handlers, 1, -1 do if handlers[i](...) == false then return true end end
+            end
+            return false
+        end,
+        mapFilter = mapFilter,
+        mapFilterSort = function(arr, f)
+            local vals, scores = mapFilter(arr, f)
+            local order = {}
+            for i = 1, #vals do order[i] = i end
+            table.sort(order, function(a, b) return scores[a] < scores[b] end)
+            local sv, ss = {}, {}
+            for i, k in ipairs(order) do sv[i], ss[i] = vals[k], scores[k] end
+            return sv, ss
+        end,
         findMinScore = function(arr, f)
-            local best, bi, bs
-            for i, v in ipairs(arr) do local s = f(v); if s and (not bs or s < bs) then best, bi, bs = v, i, s end end
-            return best, bi, bs
+            local best, bs, bi
+            for i = 1, #arr do
+                local v = arr[i]
+                local sc = f(v)
+                if sc and (not bs or sc < bs) then best, bs, bi = v, sc, i end
+            end
+            return best, bs, bi
         end,
     })
 
-    return {
+    local modules = {
         ["openmw.core"] = core,
         ["openmw.world"] = world,
         ["openmw.types"] = unsupportedProxy("openmw.types", {}, types),
@@ -359,6 +424,13 @@ local function buildModules(m, S)
             end,
         }),
     }
+    if S.isLocal then
+        -- local scripts: openmw.self / openmw.nearby exist, openmw.world does not (OpenMW rule)
+        modules["openmw.world"] = nil
+        modules["openmw.self"] = S.self
+        modules["openmw.nearby"] = actors.nearbyModule()
+    end
+    return modules
 end
 
 ---------------------------------------------------------------- records (R4)
@@ -493,9 +565,11 @@ function RT.makeInterfaces(m, S)
         end,
     }
     local Settings = settings.interface(m, S)
+    local AI = S.isActor and actors.aiInterface(function() return S.self end) or nil
     return setmetatable({}, {
         __index = function(_, k)
             if k == "Activation" then return Activation end
+            if k == "AI" and AI then return AI end
             if k == "Settings" then return Settings end
             local v = scriptInterfaces[k]
             if v == nil and S.probe then return settings.dummy end
@@ -566,8 +640,16 @@ loadHosted = function(path)
     return nil, err
 end
 
-local function instantiate(m, spec, probe)
+local LOCAL_KNOWN = { onUpdate = 1, onSave = 1, onLoad = 1, onInit = 1, onActive = 1, onInactive = 1, onActivated = 1,
+    onInterfaceOverride = 1 }
+local function instantiate(m, spec, probe, selfRef)
     local S = { path = spec.path, flags = spec.flags, callbacks = {}, mod = m, probe = probe }
+    if selfRef then
+        S.isLocal = true
+        S.self = objects.selfOf(selfRef)
+        local ot = selfRef.object and selfRef.object.objectType
+        S.isActor = ot == tes3.objectType.npc or ot == tes3.objectType.creature
+    end
     S.modules = buildModules(m, S)
     if probe then
         -- settings probe: only storage / interfaces(Settings) / l10n / util are real
@@ -597,7 +679,7 @@ local function instantiate(m, spec, probe)
     S.engineHandlers = ret.engineHandlers or {}
     S.eventHandlers = ret.eventHandlers or {}
     if ret.interfaceName and ret.interface then scriptInterfaces[ret.interfaceName] = ret.interface end
-    local known = { onUpdate = 1, onSave = 1, onLoad = 1, onInit = 1, onNewGame = 1, onPlayerAdded = 1,
+    local known = S.isLocal and LOCAL_KNOWN or { onUpdate = 1, onSave = 1, onLoad = 1, onInit = 1, onNewGame = 1, onPlayerAdded = 1,
         onObjectActive = 1, onActorActive = 1, onItemActive = 1, onActivate = 1, onInterfaceOverride = 1 }
     for k in pairs(S.engineHandlers) do
         if not known[k] then RT.warnOnce(spec.path .. k, "%s: engine handler %s is not supported", spec.path, k) end
@@ -627,7 +709,12 @@ function RT.onSave()
     if not state.ready or not tes3.player then return end
     local pdata = tes3.player.data
     for _, m in ipairs(mods) do
-        local payload = { v = 1, scripts = {}, timers = {}, storage = m.storage }
+        for _, inst in pairs(state.localActive) do
+            for _, S in ipairs(inst.scripts) do
+                if S.mod == m then RT.storeLocal(S, inst) end
+            end
+        end
+        local payload = { v = 1, scripts = {}, timers = {}, storage = m.storage, locals = m.localData }
         for _, S in ipairs(m.scripts) do
             local h = S.engineHandlers.onSave
             local data
@@ -638,7 +725,7 @@ function RT.onSave()
             payload.scripts[S.path] = { data = data }
         end
         for _, t in ipairs(timers) do
-            if t.name and t.script.mod == m then
+            if t.name and t.script.mod == m and not t.script.isLocal then
                 payload.timers[#payload.timers + 1] = { kind = t.kind, path = t.script.path, name = t.name, arg = t.arg,
                     left = t.kind == "sim" and (t.at - state.simTime) or nil, at = t.kind ~= "sim" and t.at or nil }
             end
@@ -655,7 +742,8 @@ end
 
 function RT.onLoaded(e)
     state.ready = false
-    timers, eventQueue = {}, {}
+    timers, eventQueue, localEventQueue = {}, {}, {}
+    state.localActive = {}
     state.nextFrame, state.activeQueue, state.activeQueued = {}, {}, {}
     state.passthrough = {}
     state.activation = nil
@@ -680,16 +768,10 @@ function RT.onLoaded(e)
             if ok then payload = r else reportError(m.name .. " decode", r) end
         end
         m.storage = payload and payload.storage or {}
-        for _, spec in ipairs(m.spec.scripts) do
-            local isGlobal = false
-            for _, f in ipairs(spec.flags or {}) do if f == "GLOBAL" then isGlobal = true end end
-            if isGlobal then
-                local S = instantiate(m, spec)
-                if S then m.scripts[#m.scripts + 1] = S end
-            else
-                RT.warnOnce(m.name .. spec.path, "%s: only GLOBAL scripts are hosted in this MVP; skipped %s (%s)",
-                    m.name, spec.path, table.concat(spec.flags or {}, ","))
-            end
+        m.localData = payload and payload.locals or {}
+        for _, spec in ipairs(m.globalSpecs) do
+            local S = instantiate(m, spec)
+            if S then m.scripts[#m.scripts + 1] = S end
         end
         for _, S in ipairs(m.scripts) do
             local saved = payload and payload.scripts and payload.scripts[S.path]
@@ -721,6 +803,153 @@ function RT.onLoaded(e)
     end
 end
 
+---------------------------------------------------------------- local scripts
+-- OpenMW attaches NPC/CREATURE/... scripts to every matching object; they run while
+-- the object is in an active cell. omwcompat follows the same rule with MWSE events:
+--   attach  : the object becomes active (referenceActivated, or the active cells after
+--             a load) -> one instance per (object, script): chunk runs, then onInit the
+--             first time or onLoad(saved data) after that, then onActive.
+--   detach  : referenceDeactivated, or the object is disabled/deleted -> onInactive,
+--             onSave data and named timers are kept per object, the instance is dropped.
+--             Unsavable timers are dropped (as OpenMW does on a save/load).
+--   save    : active instances are saved too; data lives in the mod's save payload,
+--             keyed by the object's stable id. Objects whose scripts keep nothing never
+--             get an id written to their reference.
+local LOCAL_FLAGS = {
+    NPC = { "npc" }, CREATURE = { "creature" }, ACTOR = { "npc", "creature" },
+    CONTAINER = { "container" }, DOOR = { "door" }, LIGHT = { "light" }, ACTIVATOR = { "activator" },
+}
+LOCAL_FLAG_NAMES = "NPC, CREATURE, ACTOR, CONTAINER, DOOR, LIGHT, ACTIVATOR"
+RT.LOCAL_FLAGS = LOCAL_FLAGS
+
+local function specMatches(spec, ot)
+    for _, f in ipairs(spec.localFlags) do
+        for _, n in ipairs(LOCAL_FLAGS[f]) do
+            if tes3.objectType[n] == ot then return true end
+        end
+    end
+    return false
+end
+
+function RT.storeLocal(S, inst)
+    local m = S.mod
+    local data
+    local h = S.engineHandlers.onSave
+    if h then
+        local ok, r = safecall(S.path .. " onSave", h)
+        if ok then data = r end
+    end
+    local tl = {}
+    for _, t in ipairs(timers) do
+        if t.script == S and t.name then
+            tl[#tl + 1] = { kind = t.kind, name = t.name, arg = t.arg,
+                left = t.kind == "sim" and (t.at - state.simTime) or nil, at = t.kind ~= "sim" and t.at or nil }
+        end
+    end
+    local ref = objects.refOf(inst.self)
+    if not ref or ref.deleted then m.localData[inst.key] = nil; return end
+    local need = data ~= nil or #tl > 0 or S.engineHandlers.onInit ~= nil
+    local key = inst.key
+    if need then
+        key = objects.refId(ref, true) -- reuses the session id, so it stays inst.key
+        inst.key = key
+    end
+    local per = m.localData[key] or {}
+    per[S.path] = need and { init = true, data = data, timers = tl } or nil
+    m.localData[key] = next(per) and per or nil
+end
+
+function RT.attachLocal(ref)
+    if not state.ready or ref == tes3.player or not ref.object then return end
+    local ot = ref.object.objectType
+    local list
+    for _, m in ipairs(mods) do
+        for _, spec in ipairs(m.localSpecs) do
+            if specMatches(spec, ot) then
+                list = list or {}
+                list[#list + 1] = { m, spec }
+            end
+        end
+    end
+    if not list then return end
+    local key = objects.refId(ref, false)
+    if state.localActive[key] then return end
+    local inst = { key = key, self = objects.selfOf(ref), scripts = {} }
+    state.localActive[key] = inst
+    for _, e in ipairs(list) do
+        local m, spec = e[1], e[2]
+        local S = instantiate(m, spec, false, ref)
+        if S then
+            S.inst = inst
+            inst.scripts[#inst.scripts + 1] = S
+            local saved = m.localData[key] and m.localData[key][spec.path]
+            if saved and saved.init then
+                if S.engineHandlers.onLoad then safecall(spec.path .. " onLoad", S.engineHandlers.onLoad, saved.data, nil) end
+            elseif S.engineHandlers.onInit then
+                safecall(spec.path .. " onInit", S.engineHandlers.onInit, nil)
+            end
+            for _, t in ipairs(saved and saved.timers or {}) do
+                addTimer({ kind = t.kind, at = t.kind == "sim" and (state.simTime + (t.left or 0)) or t.at,
+                    script = S, name = t.name, arg = t.arg })
+            end
+        end
+    end
+    for _, S in ipairs(inst.scripts) do
+        local h = S.engineHandlers.onActive
+        if h then safecall(S.path .. " onActive", h) end
+    end
+end
+
+function RT.detachLocal(key)
+    local inst = state.localActive[key]
+    if not inst then return end
+    state.localActive[key] = nil
+    for _, S in ipairs(inst.scripts) do
+        local h = S.engineHandlers.onInactive
+        if h then safecall(S.path .. " onInactive", h) end
+        RT.storeLocal(S, inst)
+        S.dead = true
+    end
+    local keep = {}
+    for _, t in ipairs(timers) do if not (t.script and t.script.dead) then keep[#keep + 1] = t end end
+    timers = keep
+end
+
+function RT.onReferenceDeactivated(ref)
+    if not state.ready or not ref then return end
+    local ok, key = pcall(objects.refId, ref, false)
+    if ok and state.localActive[key] then RT.detachLocal(key) end
+end
+
+function RT.updateLocals(dt)
+    if next(state.localActive) == nil then return end
+    local gone = {}
+    for key, inst in pairs(state.localActive) do
+        local ref = objects.refOf(inst.self)
+        if not ref or ref.deleted or ref.disabled or objects.isTomb(ref) then
+            gone[#gone + 1] = key
+        elseif dt > 0 then
+            for _, S in ipairs(inst.scripts) do
+                local h = S.engineHandlers.onUpdate
+                if h and not S.dead then safecall(S.path .. " onUpdate", h, dt) end
+            end
+        end
+    end
+    for _, key in ipairs(gone) do RT.detachLocal(key) end
+end
+
+function RT.isLocalActive(obj) return state.localActive[rawget(obj, "_id")] ~= nil end
+function RT.hasLocalScript(obj, path)
+    local inst = state.localActive[rawget(obj, "_id")]
+    if not inst or type(path) ~= "string" then return false end
+    local want = path:gsub("\\", "/"):lower()
+    for _, S in ipairs(inst.scripts) do
+        if S.path:gsub("\\", "/"):lower() == want then return true end
+    end
+    return false
+end
+RT.localInstances = function() return state.localActive end
+
 ---------------------------------------------------------------- object activity
 function RT.queueActive(ref)
     if not state.ready or ref.deleted or ref.disabled or objects.isTomb(ref) then return end
@@ -741,6 +970,8 @@ local function flushActive()
     local types = objects.types
     for _, w in ipairs(q) do
         if w:isValid() then
+            local ref = objects.refOf(w)
+            if ref then RT.attachLocal(ref) end
             callAll("onObjectActive", w)
             local T = w.type
             if T == types.NPC or T == types.Creature then callAll("onActorActive", w)
@@ -792,6 +1023,13 @@ function RT.onActivate(e)
                 if h then safecall(S.path .. " onActivate", h, target, actor) end
             end
         end
+        local inst = state.localActive[rawget(target, "_id")]
+        if inst then
+            for _, S in ipairs(inst.scripts) do
+                local h = S.engineHandlers.onActivated
+                if h then safecall(S.path .. " onActivated", h, actor) end
+            end
+        end
     end
     state.activation = nil
     local orig = ctx.pickupOriginal
@@ -817,6 +1055,7 @@ function RT.onEnterFrame(e)
     flushActive()
     if dt > 0 then tickTimers() end
     callAll("onUpdate", dt)
+    RT.updateLocals(dt)
 end
 
 ---------------------------------------------------------------- hot reload (settings)
@@ -839,13 +1078,9 @@ function RT.reloadMod(m)
     dropHandlersOf(function(owner) return old[owner] end)
     settings.dropSubscribers(function(owner) return old[owner] end)
     m.scripts = {}
-    for _, spec in ipairs(m.spec.scripts) do
-        local isGlobal = false
-        for _, f in ipairs(spec.flags or {}) do if f == "GLOBAL" then isGlobal = true end end
-        if isGlobal then
-            local S = instantiate(m, spec)
-            if S then m.scripts[#m.scripts + 1] = S end
-        end
+    for _, spec in ipairs(m.globalSpecs) do
+        local S = instantiate(m, spec)
+        if S then m.scripts[#m.scripts + 1] = S end
     end
     for _, S in ipairs(m.scripts) do
         if S.engineHandlers.onLoad then safecall(S.path .. " onLoad", S.engineHandlers.onLoad, saved[S.path], nil) end
@@ -861,6 +1096,18 @@ function RT.reloadMod(m)
                 end
             end
         end
+    end
+    -- local scripts of this mod: save, detach and re-attach on every active object
+    local again = {}
+    for key, inst in pairs(state.localActive) do
+        for _, S in ipairs(inst.scripts) do
+            if S.mod == m then again[#again + 1] = key; break end
+        end
+    end
+    for _, key in ipairs(again) do
+        local ref = objects.refOf(state.localActive[key].self)
+        RT.detachLocal(key)
+        if ref then RT.attachLocal(ref) end
     end
     mwse.log("[omwcompat] %s reloaded to apply changed settings", m.name)
     return true
@@ -900,12 +1147,15 @@ local wired = false
 local function wire()
     if wired then return end
     wired = true
-    event.register(tes3.event.initialized, function() objects.initTypes() end, { priority = 1000 })
+    event.register(tes3.event.initialized, function() objects.initTypes(); actors.extendTypes(objects.types) end, { priority = 1000 })
     event.register(tes3.event.loaded, RT.onLoaded, { priority = -100 })
     event.register(tes3.event.save, RT.onSave, { priority = 100 })
     event.register(tes3.event.enterFrame, RT.onEnterFrame)
     event.register(tes3.event.activate, RT.onActivate, { priority = 10 })
     event.register(tes3.event.referenceActivated, function(e) RT.queueActive(e.reference) end)
+    if tes3.event.referenceDeactivated then
+        event.register(tes3.event.referenceDeactivated, function(e) RT.onReferenceDeactivated(e.reference) end)
+    end
     event.register(tes3.event.modConfigReady, RT.onModConfigReady)
 end
 
@@ -919,7 +1169,23 @@ function RT.register(spec)
     assert(type(spec) == "table" and spec.mod and spec.root and spec.scripts, "omwcompat.register: bad spec")
     local root = spec.root:gsub("\\", "/")
     if root:sub(-1) ~= "/" then root = root .. "/" end
-    local m = { name = spec.mod, title = spec.title, credits = spec.credits, root = root, spec = spec, scripts = {}, storage = {}, meshmap = {} }
+    local m = { name = spec.mod, title = spec.title, credits = spec.credits, root = root, spec = spec, scripts = {}, storage = {}, meshmap = {},
+        globalSpecs = {}, localSpecs = {}, localData = {} }
+    for _, sp in ipairs(spec.scripts) do
+        local isGlobal, lflags, skipped = false, {}, {}
+        for _, f in ipairs(sp.flags or {}) do
+            f = tostring(f):upper()
+            if f == "GLOBAL" then isGlobal = true
+            elseif LOCAL_FLAGS[f] then lflags[#lflags + 1] = f
+            else skipped[#skipped + 1] = f end
+        end
+        if isGlobal then m.globalSpecs[#m.globalSpecs + 1] = sp end
+        if #lflags > 0 then m.localSpecs[#m.localSpecs + 1] = { path = sp.path, flags = sp.flags, localFlags = lflags } end
+        if #skipped > 0 then
+            RT.warn("%s: script flag(s) %s of %s are not hosted (GLOBAL and %s are)", spec.mod, table.concat(skipped, ","),
+                sp.path, LOCAL_FLAG_NAMES)
+        end
+    end
     for k, v in pairs(spec.meshmap or {}) do
         local nk = normMesh(k)
         m.meshmap[nk] = v

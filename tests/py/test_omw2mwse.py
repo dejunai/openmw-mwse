@@ -182,6 +182,70 @@ class ModScanTests(unittest.TestCase):
         self.assertTrue(any("ui_debugWidget.lua" in w and "ignored for the verdict" in w for w in s.warnings), s.warnings)
 
 
+LOCAL_SRC = """\
+local self = require('openmw.self')
+local nearby = require('openmw.nearby')
+local types = require('openmw.types')
+local I = require('openmw.interfaces')
+local function tick()
+  if types.Actor.stats.dynamic.health(self).current < 1 or types.Actor.isDead(self) then return end
+  local p = I.AI.getActivePackage()
+  for _, a in ipairs(nearby.actors) do
+    if a.type == types.NPC and types.Actor.stats.ai.fight(self).modified > 80 then
+      I.AI.startPackage({ type = 'Combat', target = a })
+    end
+  end
+end
+return { engineHandlers = { onUpdate = tick, onActive = tick } }
+"""
+
+
+class LocalScriptScanTests(unittest.TestCase):
+    def test_creature_script_with_self_nearby_ai_is_ready(self):
+        with tempfile.TemporaryDirectory() as t:
+            _make_mod(Path(t), script_src=LOCAL_SRC, flags="CREATURE")
+            s = scan_mod(Path(t), MANIFEST)
+            self.assertEqual(s.verdict, "ready", s.blockers)
+            self.assertEqual(s.symbols["openmw.interfaces.AI.startPackage"]["status"], "partial")
+
+    def test_local_modules_in_a_global_script_block(self):
+        with tempfile.TemporaryDirectory() as t:
+            _make_mod(Path(t), script_src=LOCAL_SRC, flags="GLOBAL")
+            s = scan_mod(Path(t), MANIFEST)
+            self.assertEqual(s.verdict, "blocked")
+            text = "\n".join(s.blockers)
+            self.assertIn("openmw.self is only available to local scripts", text)
+            self.assertIn("I.AI is only available to actor scripts", text)
+
+    def test_world_in_a_local_script_blocks(self):
+        with tempfile.TemporaryDirectory() as t:
+            _make_mod(Path(t), script_src="local world = require('openmw.world')\nreturn {}\n", flags="NPC")
+            s = scan_mod(Path(t), MANIFEST)
+            self.assertTrue(any("openmw.world is only available to global scripts" in b for b in s.blockers), s.blockers)
+
+    def test_ai_in_a_door_script_blocks(self):
+        with tempfile.TemporaryDirectory() as t:
+            src = "local I = require('openmw.interfaces')\nI.AI.getActivePackage()\nreturn {}\n"
+            _make_mod(Path(t), script_src=src, flags="DOOR")
+            s = scan_mod(Path(t), MANIFEST)
+            self.assertTrue(any("I.AI is only available to actor scripts" in b for b in s.blockers), s.blockers)
+
+    def test_builtin_interfaces_are_checked_mod_interfaces_are_optional(self):
+        self.assertEqual(classify("openmw.interfaces.UI.getMode", MANIFEST), "unsupported")
+        self.assertEqual(classify("openmw.interfaces.AI.getActivePackage", MANIFEST), "partial")
+        self.assertEqual(classify("openmw.interfaces.AI.forEachPackage", MANIFEST), "unsupported")
+        self.assertEqual(classify("openmw.interfaces.SomeMod.fn", MANIFEST), "interface")
+        self.assertEqual(classify("openmw.self.controls", MANIFEST), "unsupported")
+        self.assertEqual(classify("openmw.nearby.castRay", MANIFEST), "unsupported")
+
+    def test_wildlife_19_is_ready(self):
+        src = ROOT / "corpus" / "wildlife-attacks-npcs-too" / "_archive" / "full"
+        if not (src / "wildlife_attacks_npc.omwscripts").is_file():
+            self.skipTest("Wildlife Attacks NPCs Too extract not present (git-ignored corpus)")
+        s = scan_mod(src, MANIFEST)
+        self.assertEqual(s.verdict, "ready", s.blockers)
+
+
 class PackageTests(unittest.TestCase):
     def test_slug_and_alias(self):
         self.assertEqual(default_slug("LeaveTheLightsOff"), "ltlo")

@@ -52,6 +52,33 @@ The complete original package is `Off/<Mod>/OpenMW/<original paths>`.
 - `referenceActivated` queues `onObjectActive`. Tombstoned, disabled and deleted references are skipped.
 - Every handler runs inside `xpcall`. Errors go to MWSE.log, at most 5 per site.
 
+## Local scripts (0.3.0)
+
+Scripts declared with NPC, CREATURE, ACTOR, CONTAINER, DOOR, LIGHT or ACTIVATOR attach by rule,
+never per mod:
+
+- **Attach:** when an object of a matching type becomes active (`referenceActivated`, or the
+  active cells after a load), each matching script gets its own instance. The chunk runs, then
+  `onInit` the first time or `onLoad(saved)` after that, then `onActive`. The player never gets
+  NPC/ACTOR scripts.
+- **Run:** `onUpdate(dt)` each unpaused frame, timers, `eventHandlers` reached through
+  `GameObject:sendEvent`, and `onActivated(actor)` when the object is activated.
+- **Detach:** on `referenceDeactivated`, or when the object is disabled, deleted or removed:
+  `onInactive`, then the `onSave` result and named timers are kept for that object and the
+  instance is dropped. Unsavable timers are dropped.
+- **Save:** active instances are saved as well. Data goes into the mod's save payload under the
+  object's stable id. An object whose scripts keep nothing never gets an id in its `ref.data`.
+
+Local scripts get `openmw.self` (a GameObject equal to the object, plus `object`, `isActive`,
+`enableAI`) and `openmw.nearby` (actors, players, items, containers, doors, activators in the
+active cells, cached per frame), and not `openmw.world`. Actor scripts also get `I.AI`
+(see `omwcompat/actors.lua`). `types.Actor.stats.dynamic`, `.attributes`, `.ai` and
+`types.Actor.isDead` map to the mobile (`mobile.health`, `mobile.fight`, `mobile.isDead`, ...),
+falling back to the record when the actor is not loaded.
+
+The scanner checks the same scopes: `openmw.self`/`openmw.nearby` in a GLOBAL script,
+`openmw.world` in a local script, or `I.AI` outside an actor script is a blocker.
+
 ## Save data
 
 - On MWSE `save`, each script's `onSave()` result is serialized into a single string:

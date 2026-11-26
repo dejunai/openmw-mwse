@@ -51,11 +51,24 @@
 
 ## Runtime limits (MVP)
 
-- Only GLOBAL scripts are hosted. PLAYER, NPC, CUSTOM, MENU and LOAD scripts are skipped with a
-  warning. `openmw.self`, `ui`, `input`, `camera`, `nearby`, `ambient` and `animation` are not provided.
+- GLOBAL scripts and object-attached scripts (NPC, CREATURE, ACTOR, CONTAINER, DOOR, LIGHT,
+  ACTIVATOR; 0.3.0) are hosted. PLAYER, CUSTOM, MENU, LOAD and ITEM scripts are skipped with a
+  warning. `ui`, `input`, `camera`, `ambient` and `animation` are not provided.
+- Local scripts (0.3.0) differ from OpenMW in a few documented ways:
+  - An instance is dropped when its object leaves the active cells and recreated when it comes
+    back: the chunk runs again, then `onLoad(data from onSave)`. Unsavable timers do not survive
+    this, exactly as they do not survive a save/load in OpenMW.
+  - `openmw.nearby` lists the references of `tes3.getActiveCells()`; `castRay`, `findPath` and the
+    other queries are not provided.
+  - `I.AI`: Combat uses `mobile:startCombat`; Wander/Travel/Follow/Escort use `tes3.setAI*`;
+    `removePackages` only removes Combat. `getActivePackage` reports Combat while `inCombat`,
+    otherwise the aiPlanner package.
+  - AI stats (`fight`, `flee`, ...) have one live value per actor in MWSE; writing `base` or
+    `modifier` changes that value, never the shared record.
 - Several parts are partial or stubs:
-  - `world.mwscript` is not provided. Accessing it raises an error.
-  - `GameObject:sendEvent` is a no-op that logs a warning.
+  - `world.mwscript` only provides `getGlobalScript`.
+  - `GameObject:sendEvent` reaches the object's local scripts while it is active; events to an
+    inactive object are dropped.
   - `addScript` and `split` raise errors.
   - `storage` is minimal. Every section is saved with the game.
   - `I.Settings` only records defaults.

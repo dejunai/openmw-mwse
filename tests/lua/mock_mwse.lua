@@ -269,6 +269,17 @@ function M.install(opts)
             return { valid = function() return not ref._deleted end, getObject = function() return ref end }
         end,
         messageBox = function() end,
+        aiPackage = { none = -1, wander = 0, travel = 1, escort = 2, follow = 3, activate = 4 },
+        setStatistic = function(p)
+            local st = p.reference.mobile and p.reference.mobile[p.name]
+            assert(st, "setStatistic: no mobile statistic " .. tostring(p.name))
+            if p.current then st.current = p.current end
+            if p.base then st.base = p.base end
+        end,
+        setAIWander = function(p) W.aiCalls = W.aiCalls or {}; W.aiCalls[#W.aiCalls + 1] = { "wander", p } end,
+        setAITravel = function(p) W.aiCalls = W.aiCalls or {}; W.aiCalls[#W.aiCalls + 1] = { "travel", p } end,
+        setAIFollow = function(p) W.aiCalls = W.aiCalls or {}; W.aiCalls[#W.aiCalls + 1] = { "follow", p } end,
+        setAIEscort = function(p) W.aiCalls = W.aiCalls or {}; W.aiCalls[#W.aiCalls + 1] = { "escort", p } end,
     }
 
     ------------------------------------------------------------ events / timers
@@ -306,6 +317,25 @@ function M.install(opts)
     }
     _G.lfs = { attributes = function() return nil end, dir = function() return function() end end }
     package.preload["lfs"] = function() return _G.lfs end
+
+    ------------------------------------------------------------ actors (mobiles)
+    -- t = { hp, fight, flee, dead, pkg = tes3.aiPackage value or nil, sticky = combat sets inCombat }
+    function M.addMobile(ref, t)
+        t = t or {}
+        local mob = { reference = ref, health = { current = t.hp or 50, base = t.hp or 50 },
+            magicka = { current = 10, base = 10 }, fatigue = { current = 100, base = 100 },
+            strength = { current = t.str or 40, base = t.strBase or t.str or 40 },
+            fight = t.fight or 30, flee = t.flee or 0, alarm = 0, hello = 30,
+            isDead = t.dead or false, inCombat = false, activeAI = true, combatCalls = {}, actionData = {} }
+        mob.aiPlanner = { getActivePackage = function() if t.pkg == nil then return nil end; return { type = t.pkg } end }
+        function mob:startCombat(target)
+            self.combatCalls[#self.combatCalls + 1] = target
+            if t.sticky then self.inCombat = true; self.actionData.target = target end
+        end
+        function mob:stopCombat() self.inCombat = false; self.actionData.target = nil end
+        rawset(ref, "mobile", mob)
+        return mob
+    end
 
     ------------------------------------------------------------ player / world
     local npc = newObject({ id = "player", objectType = OT.npc, inventory = {} })

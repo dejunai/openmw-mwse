@@ -290,8 +290,9 @@ def classify(symbol: str, manifest: dict) -> str:
         if parts[0] in ("openmw", "openmw_aux"):
             return "unsupported"
         return "local"
-    if symbol.startswith("openmw.interfaces.") and len(parts) >= 3 and parts[2] not in ("Activation", "Settings"):
-        return "interface"
+    builtin = manifest.get("builtinInterfaces", {"Activation": "global", "Settings": "any"})
+    if symbol.startswith("openmw.interfaces.") and len(parts) >= 3 and parts[2] not in builtin:
+        return "interface"  # provided by a mod (optional unless a hosted script provides it)
     for k in range(len(parts), 1, -1):
         pref = ".".join(parts[:k])
         if pref in syms:
@@ -471,6 +472,56 @@ def loaded_lua_paths(scripts: list[ScriptEntry], files: list[FileScan]) -> set[s
     return loaded
 
 
+# Which scripts a file runs in. OpenMW gives GLOBAL scripts openmw.world and local
+# (object-attached) scripts openmw.self / openmw.nearby; built-in interfaces exist
+# only in some script kinds (I.AI in actor scripts, I.Activation in global ones).
+FLAG_SCOPE = {"GLOBAL": "global", "NPC": "actor", "CREATURE": "actor", "ACTOR": "actor", "PLAYER": "player",
+              "CONTAINER": "object", "DOOR": "object", "LIGHT": "object", "ACTIVATOR": "object", "ITEM": "object",
+              "MENU": "menu", "CUSTOM": "custom", "LOAD": "load"}
+SCOPE_ALLOWS = {
+    "any": {"global", "actor", "player", "object", "menu", "custom", "load"},
+    "global": {"global"},
+    "local": {"actor", "player", "object", "custom"},
+    "actor": {"actor", "player"},
+    "player": {"player"},
+}
+
+
+def file_scopes(scripts: list[ScriptEntry], files: list[FileScan]) -> dict[str, set[str]]:
+    """file path -> script kinds (FLAG_SCOPE values) that load it."""
+    out: dict[str, set[str]] = {}
+    for s in scripts:
+        kinds = {FLAG_SCOPE.get(f, "custom") for f in s.flags}
+        loaded = loaded_lua_paths([s], files) or set()
+        for p in loaded:
+            out.setdefault(p, set()).update(kinds)
+    return out
+
+
+def scope_blockers(counted: list[FileScan], scopes: dict[str, set[str]], manifest: dict) -> list[str]:
+    mod_scopes = manifest.get("moduleScopes", {})
+    iface_scopes = manifest.get("builtinInterfaces", {})
+    out: list[str] = []
+    for f in counted:
+        kinds = scopes.get(f.path)
+        if not kinds:
+            continue
+        need: dict[str, str] = {}
+        for mod in f.requires.values():
+            for mname, sc in mod_scopes.items():
+                if mod == mname or mod.startswith(mname + "."):
+                    need[mname] = sc
+        for sym in f.uses:
+            parts = sym.split(".")
+            if sym.startswith("openmw.interfaces.") and len(parts) >= 3 and parts[2] in iface_scopes:
+                need["I." + parts[2]] = iface_scopes[parts[2]]
+        for what, sc in sorted(need.items()):
+            bad = sorted(k for k in kinds if k not in SCOPE_ALLOWS.get(sc, set()))
+            if bad:
+                out.append(f"{f.path}: {what} is only available to {sc} scripts, but this file runs as {', '.join(bad)}")
+    return out
+
+
 def scan_mod(root: Path, manifest: dict | None = None, name: str | None = None) -> ModScan:
     manifest = manifest or load_manifest()
     root = Path(root)
@@ -546,7 +597,10 @@ def scan_mod(root: Path, manifest: dict | None = None, name: str | None = None) 
             blockers.append(f"unsupported GameObject:{m} ({e['count']}x)")
     for fl, st in sorted(flags.items()):
         if st == "unsupported":
-            blockers.append(f"script flag {fl} not hosted (only GLOBAL scripts run)")
+            hosted = ", ".join(sorted(k for k, v in manifest["scriptFlags"].items() if v != "unsupported"))
+            blockers.append(f"script flag {fl} not hosted (hosted: {hosted})")
+    if scripts:
+        blockers.extend(scope_blockers(counted, file_scopes(scripts, files), manifest))
     if files and not scripts:
         warnings.append("no .omwscripts file found (script declarations unknown)")
     for s in scripts:

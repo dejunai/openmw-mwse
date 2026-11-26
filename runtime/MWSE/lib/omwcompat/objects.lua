@@ -414,7 +414,13 @@ local getters = {
 }
 
 local methods = {}
+local selfMethods = {}
 OBJ.__index = function(w, k)
+    if rawget(w, "_self") then
+        local sm = selfMethods[k]
+        if sm then return sm end
+        if k == "object" then local ref = refOf(w); return ref and M.wrap(ref) or nil end
+    end
     local m = methods[k]
     if m then return m end
     local g = getters[k]
@@ -558,11 +564,22 @@ function methods:activateBy(actor)
     local ref, aref = refOf(self), refOf(actor)
     if ref and aref then aref:activate(ref) end
 end
-function methods:sendEvent(name, data)
-    rt.warnOnce("sendEvent", "GameObject:sendEvent('%s') ignored: local scripts are not supported in this MVP", name)
-end
+function methods:sendEvent(name, data) rt.sendLocalEvent(self, name, data) end
 function methods:addScript(path) error("omwcompat: addScript (CUSTOM local scripts) is not supported in this MVP", 2) end
-function methods:hasScript() return false end
+function methods:hasScript(path) return rt.hasLocalScript(self, path) end
+
+-- openmw.self: a GameObject for the object a local script is attached to, plus the
+-- self-only members. It shares the wrapper id, so it compares equal to that object.
+function M.selfOf(ref)
+    local w = M.wrap(ref)
+    return setmetatable({ _id = rawget(w, "_id"), _h = handleOf(ref), _self = true }, OBJ)
+end
+function selfMethods:isActive() return rt.isLocalActive(self) end
+function selfMethods:enableAI(on)
+    local ref = refOf(self)
+    local mob = ref and ref.mobile
+    if mob then mob.activeAI = on and true or false end
+end
 function methods:getBoundingBox() error("omwcompat: getBoundingBox not supported", 2) end
 function methods:split(n) error("omwcompat: split not supported", 2) end
 
