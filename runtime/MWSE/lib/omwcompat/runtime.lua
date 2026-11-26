@@ -9,7 +9,7 @@ local settings = require("omwcompat.settings")
 local conversions = require("omwcompat.conversions")
 local actors = require("omwcompat.actors")
 
-local RT = { VERSION = "0.3.0", API_REVISION = 70, PROBE_API_REVISION = 100 }
+local RT = { VERSION = "0.3.1", API_REVISION = 70, PROBE_API_REVISION = 100 }
 local LOCAL_FLAG_NAMES
 objects.init(RT)
 settings.init(RT)
@@ -1167,9 +1167,17 @@ end
 --              settings = { { key=, name=, description=, renderer=, default=, min=, max=, integer=, apply="live"|"reload" } } } }
 function RT.register(spec)
     assert(type(spec) == "table" and spec.mod and spec.root and spec.scripts, "omwcompat.register: bad spec")
+    -- runtimeVersion: the omwcompat the mod was converted with (omw2mwse 0.2.3+). The generated
+    -- main.lua logs the one mismatch line itself (so it also works with older runtimes); here
+    -- the versions only go into the warning for script flags this runtime cannot host.
+    local built = spec.runtimeVersion and tostring(spec.runtimeVersion) or nil
+    local versions = ""
+    if built and built ~= RT.VERSION then
+        versions = string.format(" (built for omwcompat %s, loaded %s)", built, RT.VERSION)
+    end
     local root = spec.root:gsub("\\", "/")
     if root:sub(-1) ~= "/" then root = root .. "/" end
-    local m = { name = spec.mod, title = spec.title, credits = spec.credits, root = root, spec = spec, scripts = {}, storage = {}, meshmap = {},
+    local m = { name = spec.mod, builtFor = built, title = spec.title, credits = spec.credits, root = root, spec = spec, scripts = {}, storage = {}, meshmap = {},
         globalSpecs = {}, localSpecs = {}, localData = {} }
     for _, sp in ipairs(spec.scripts) do
         local isGlobal, lflags, skipped = false, {}, {}
@@ -1182,8 +1190,8 @@ function RT.register(spec)
         if isGlobal then m.globalSpecs[#m.globalSpecs + 1] = sp end
         if #lflags > 0 then m.localSpecs[#m.localSpecs + 1] = { path = sp.path, flags = sp.flags, localFlags = lflags } end
         if #skipped > 0 then
-            RT.warn("%s: script flag(s) %s of %s are not hosted (GLOBAL and %s are)", spec.mod, table.concat(skipped, ","),
-                sp.path, LOCAL_FLAG_NAMES)
+            RT.warn("%s: script flag(s) %s of %s are not hosted (GLOBAL and %s are)%s", spec.mod, table.concat(skipped, ","),
+                sp.path, LOCAL_FLAG_NAMES, versions)
         end
     end
     for k, v in pairs(spec.meshmap or {}) do

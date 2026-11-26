@@ -1,6 +1,6 @@
 {
  "runtime": "omwcompat",
- "version": "0.3.0",
+ "version": "0.3.1",
  "statuses": {
   "full": "emulated with OpenMW semantics",
   "partial": "emulated with documented differences",

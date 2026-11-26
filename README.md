@@ -17,7 +17,7 @@ It has two parts:
 - **omwcompat** - an MWSE Lua runtime that provides the `openmw.*` API, so the mod's
   original Lua scripts run unmodified inside MWSE.
 
-## Supported (omwcompat 0.3.0)
+## Supported (omwcompat 0.3.1)
 
 **Script kinds**
 

@@ -378,6 +378,18 @@ def _long_rel(prefix: str, length: int) -> str:
     return rel
 
 
+class RuntimeVersionTests(unittest.TestCase):
+    def test_versions_agree_and_main_declares_it(self):
+        import re
+        from omw2mwse.build import render_main, runtime_version
+        lua = (ROOT / "runtime/MWSE/lib/omwcompat/runtime.lua").read_text(encoding="utf-8")
+        self.assertEqual(re.search(r'VERSION = "([^"]+)"', lua).group(1), runtime_version())
+        main = render_main("M", [], {})
+        self.assertIn(f'local BUILT_FOR = "{runtime_version()}"', main)
+        self.assertIn("runtimeVersion = BUILT_FOR", main)
+        self.assertIn('local BUILT_FOR = "0.2.2"', render_main("M", [], {}, runtime="0.2.2"))
+
+
 class OffLayoutTests(unittest.TestCase):
     """Conflict-tools' unified Off layout (docs/OFF-LAYOUT.md there): one owner name, a
     complete manifest, and the MAX_PATH list."""

@@ -79,6 +79,17 @@ falling back to the record when the actor is not loaded.
 The scanner checks the same scopes: `openmw.self`/`openmw.nearby` in a GLOBAL script,
 `openmw.world` in a local script, or `I.AI` outside an actor script is a blocker.
 
+## Runtime version check (0.3.1)
+
+Each generated `main.lua` declares the omwcompat it was built with (`local BUILT_FOR = "0.3.1"`,
+also passed to `register` as `runtimeVersion`). Vortex deploys one copy of the shared
+`MWSE/lib/omwcompat` files, so a mod may run on a different runtime. When `omwcompat.VERSION`
+differs, `main.lua` writes exactly one line to MWSE.log, e.g.
+`[omwcompat 0.3.1] SomeMod was built for omwcompat 0.2.2 (loaded 0.3.1)`; the check lives
+in `main.lua` so it works with older runtimes too. Nothing is logged when they match. If the
+loaded runtime cannot host some of the mod's script flags, its "not hosted" warning ends with
+`(built for omwcompat X, loaded Y)` (runtimes 0.3.1 and later).
+
 ## Save data
 
 - On MWSE `save`, each script's `onSave()` result is serialized into a single string:
