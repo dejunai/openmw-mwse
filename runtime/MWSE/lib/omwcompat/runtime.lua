@@ -239,7 +239,7 @@ local function buildModules(m, S)
         getGameTime = RT.gameTime,
         getSimulationTime = function() return state.simTime end,
         isWorldPaused = function() return tes3.menuMode() end,
-        mwscript = setmetatable({}, { __index = function(_, k)
+        mwscript = setmetatable({ getGlobalScript = RT.getGlobalScript }, { __index = function(_, k)
             error("omwcompat: openmw.world.mwscript." .. tostring(k) .. " is not supported (MVP)", 2)
         end }),
     })
@@ -383,6 +383,50 @@ function RT.resolveMesh(m, requested)
     local alias = state.meshmap[n] or (m and m.meshmap and m.meshmap[n])
     if alias and tes3.getFileExists("meshes\\" .. alias:gsub("/", "\\")) then return alias, "alias" end
     return nil, alias and "alias-missing" or "too-long"
+end
+
+-- world.mwscript.getGlobalScript(recordId[, player]) -> MWScript-like object.
+-- .variables reads/writes the vanilla global script's variables through
+-- tes3.getScript(id).context (MWSE tes3scriptContext). Unknown variables read as nil;
+-- writing one raises. .isRunning = true/false starts/stops the global script.
+-- Returns nil when no script with that id exists. The player argument is accepted
+-- and ignored (single player).
+function RT.getGlobalScript(recordId, player)
+    if type(recordId) ~= "string" then error("getGlobalScript: recordId must be a string", 2) end
+    local script = tes3.getScript(recordId)
+    if not script then return nil end
+    local id = script.id or recordId
+    local function ctx()
+        local ok, c = pcall(function() return script.context end)
+        return ok and c or nil
+    end
+    local variables = setmetatable({}, {
+        __index = function(_, k)
+            local c = ctx()
+            if not c then return nil end
+            local ok, v = pcall(function() return c[k] end)
+            if ok then return v end
+            return nil
+        end,
+        __newindex = function(_, k, v)
+            local c = ctx()
+            if not c then error("omwcompat: mwscript " .. id .. " has no variable context", 2) end
+            local ok = pcall(function() c[k] = v end)
+            if not ok then error("omwcompat: mwscript " .. id .. " has no variable " .. tostring(k), 2) end
+        end,
+    })
+    local running = nil
+    return setmetatable({ recordId = id:lower(), variables = variables, player = player }, {
+        __index = function(_, k) if k == "isRunning" then return running end end,
+        __newindex = function(t, k, v)
+            if k == "isRunning" then
+                if v then tes3.startGlobalScript({ id = id }) else tes3.stopGlobalScript({ id = id }) end
+                running = v and true or false
+            else
+                rawset(t, k, v)
+            end
+        end,
+    })
 end
 
 function RT.createRecord(m, draft)

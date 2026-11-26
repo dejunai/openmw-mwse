@@ -19,7 +19,7 @@ M.deepcopy = deepcopy
 
 function M.install(opts)
     opts = opts or {}
-    local W = { objects = {}, objectList = {}, cells = {}, logs = {}, handlers = {}, crimes = {}, frame = 0,
+    local W = { objects = {}, scripts = {}, objectList = {}, cells = {}, logs = {}, handlers = {}, crimes = {}, frame = 0,
         files = opts.files or {}, mods = opts.mods or { ["morrowind.esm"] = true } }
     M.W = W
 
@@ -117,6 +117,25 @@ function M.install(opts)
         return o
     end
     function M.addObject(t) return newObject(t) end
+    -- a vanilla global script with variables; context indexing errors on unknown names like MWSE
+    function M.addScript(id, vars)
+        local store = {}
+        for k, v in pairs(vars or {}) do store[k:lower()] = v end
+        local ctx = setmetatable({}, {
+            __index = function(_, k)
+                local v = store[tostring(k):lower()]
+                if v == nil then error("unknown variable " .. tostring(k)) end
+                return v
+            end,
+            __newindex = function(_, k, v)
+                if store[tostring(k):lower()] == nil then error("unknown variable " .. tostring(k)) end
+                store[tostring(k):lower()] = v
+            end,
+        })
+        local s = { id = id, context = ctx, _vars = store }
+        W.scripts[id:lower()] = s
+        return s
+    end
 
     ------------------------------------------------------------ cells / refs
     local cellMT = {}
@@ -242,6 +261,9 @@ function M.install(opts)
         isModActive = function(n) return W.mods[n:lower()] == true end,
         findGMST = function() return nil end,
         findGlobal = function() return { value = 30 } end,
+        getScript = function(id) return id and W.scripts[id:lower()] or nil end,
+        startGlobalScript = function(p) local s = W.scripts[p.id:lower()]; if s then s._running = true end end,
+        stopGlobalScript = function(p) local s = W.scripts[p.id:lower()]; if s then s._running = false end end,
         menuMode = function() return W.menuMode == true end,
         makeSafeObjectHandle = function(ref)
             return { valid = function() return not ref._deleted end, getObject = function() return ref end }

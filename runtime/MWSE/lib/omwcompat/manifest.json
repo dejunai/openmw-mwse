@@ -178,6 +178,7 @@
   "openmw.world.getSimulationTime": "full",
   "openmw.world.isWorldPaused": "full",
   "openmw.world.mwscript": "unsupported",
+  "openmw.world.mwscript.getGlobalScript": "partial",
   "openmw.world.players": "full",
   "openmw_aux.calendar.daysInWeek": "full",
   "openmw_aux.calendar.formatGameTime": "partial",
