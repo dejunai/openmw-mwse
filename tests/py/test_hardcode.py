@@ -189,6 +189,16 @@ class Convert(unittest.TestCase):
             self.assertTrue((root / "MWSE" / "mods" / "Demo" / "main.lua").exists())
             self.assertTrue((root / "MWSE" / "omw" / "Demo" / "omw2mwse-manifest.json").exists())
             self.assertEqual(tree(src), before)  # source untouched
+            notice = "Unofficial mwsuite conversion of Demo by the original author"
+            self.assertIn("Report issues to mwsuite / dej (dejunai)", m["notice"])
+            meta = (root / "Demo-metadata.toml").read_text(encoding="utf-8")
+            self.assertIn(notice, meta)
+            readme = (root / "MWSE" / "omw" / "Demo" / "README-mwsuite.md").read_text(encoding="utf-8")
+            self.assertIn("Please do not send bug reports", readme)
+            r = convert(root, "normal", credits={"author": "Someone", "license": "MIT", "url": "https://x"})
+            meta = (root / "Demo-metadata.toml").read_text(encoding="utf-8")
+            self.assertIn("not to Someone. Original license: MIT.", meta)
+            self.assertIn('"Someone (original mod)"', meta)
 
     def test_idempotent(self):
         with tempfile.TemporaryDirectory() as t:

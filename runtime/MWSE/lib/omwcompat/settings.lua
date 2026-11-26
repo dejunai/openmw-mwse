@@ -349,20 +349,26 @@ function M.buildMCM(m, opts)
     end
     local firstPage = registry.pages[pageKeys[1]]
     local PL = firstPage and M.l10n(m, firstPage.l10n) or function(x) return x end
-    local title = (firstPage and firstPage.name and PL(firstPage.name)) or m.title or m.name
-    local template = mwse.mcm.createTemplate({ name = title })
+    local title = m.title or (firstPage and firstPage.name and PL(firstPage.name)) or m.name
+    local template = mwse.mcm.createTemplate({ name = (opts.prefix or "") .. title })
     template.onClose = function()
         M.saveConfig(m.name)
         if m.onSettingsClosed then m.onSettingsClosed() end
     end
-    local summary = { title = title, pages = {} }
+    local summary = { title = (opts.prefix or "") .. title, pages = {} }
+    local firstDone = false
     for _, pk in ipairs(pageKeys) do
         local p = registry.pages[pk]
         local L = p and M.l10n(m, p.l10n) or function(x) return x end
         local plabel = p and p.name and L(p.name) or "Settings"
         local pdesc = p and p.description and L(p.description) or ""
         if opts.pageNote then pdesc = (pdesc ~= "" and (pdesc .. "\n\n") or "") .. opts.pageNote end
+        if opts.notice then pdesc = opts.notice .. (pdesc ~= "" and ("\n\n" .. pdesc) or "") end
         local page = template:createSideBarPage({ label = plabel, description = pdesc })
+        if opts.notice and not firstDone then
+            page:createInfo({ text = opts.notice })
+            firstDone = true
+        end
         local ps = { label = plabel, groups = {} }
         table.sort(pagesUsed[pk], function(a, b) if a.order ~= b.order then return a.order < b.order end return a.seq < b.seq end)
         for _, g in ipairs(pagesUsed[pk]) do

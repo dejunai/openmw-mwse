@@ -16,7 +16,7 @@ from pathlib import Path
 from . import __version__
 from . import sidecar as SC
 from . import warn
-from .build import MANIFEST_NAME, BuildError, Writer, build, sha256b, text_bytes
+from .build import MANIFEST_NAME, BuildError, Writer, build, notice_text, sha256b, text_bytes
 from .scan import load_manifest
 
 MODES = ("normal", "hardcode")
@@ -52,7 +52,8 @@ def _tree_sig(p: Path) -> str:
 def convert(staged: Path, mode: str = "normal", *, name: str | None = None, source: Path | None = None,
             sidecar_path: Path | None = None, accept: bool = False, dry_run: bool = False, adopt: bool = False,
             with_runtime: bool = True, meshes_from: list[Path] | None = None, interactive: bool | None = None,
-            inp=None, err=None, manifest: dict | None = None) -> dict:
+            inp=None, err=None, manifest: dict | None = None, title: str | None = None,
+            credits: dict | None = None) -> dict:
     """Returns the machine-readable result (also printed by `--json`)."""
     if mode not in MODES:
         raise BuildError(f"mode must be one of {MODES}")
@@ -109,7 +110,7 @@ def convert(staged: Path, mode: str = "normal", *, name: str | None = None, sour
         entry = {"name": modname, "source": str(src.relative_to(staged)) if staged in src.parents else str(src)}
         try:
             res = build(src, w, modname, slug=None, with_runtime=with_runtime, meshes_from=mesh_dirs, mode=mode,
-                        sidecar=sc, confirm=confirm, manifest=manifest)
+                        sidecar=sc, confirm=confirm, manifest=manifest, title=title, credits=credits)
         except warn.Refused as e:
             entry.update({"status": "refused", "message": str(e), "warning": warning_box.get("text")})
             result["mods"].append(entry)
@@ -129,6 +130,7 @@ def convert(staged: Path, mode: str = "normal", *, name: str | None = None, sour
             "conflicts": w.conflicts,
             "files": {rel: w.status.get(rel, "?") for rel in sorted(set(w.plan) | {r for r, s in w.status.items() if s == "removed"})},
             "newGameRequired": False,
+            "notice": notice_text(res.credits),
         })
         if "text" in warning_box:
             entry["warning"] = warning_box["text"]

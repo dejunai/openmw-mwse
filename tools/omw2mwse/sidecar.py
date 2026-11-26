@@ -1,5 +1,8 @@
 """<Mod>.omw2mwse.toml: opt-in list of hard-coded values to expose as settings.
 
+    [mod]                                  # credits for the original (shown in the MCM, log, README)
+    title = "Leave The Lights Off"  author = "OwnlyMe"  license = "..."  url = "https://..."
+
     [mcm]
     page = "Leave The Lights Off"          # MCM page title (default: mod name)
     description = "..."                    # optional page text
@@ -30,6 +33,7 @@ from pathlib import Path
 FIELDS_COMMON = {"key", "file", "label", "description", "min", "max", "integer", "default"}
 FIELDS_CONST = FIELDS_COMMON | {"name"}
 FIELDS_LIT = FIELDS_COMMON | {"line", "context", "literal"}
+FIELDS_MOD = {"name", "title", "author", "license", "url", "version"}
 
 
 class SidecarError(Exception):
@@ -45,6 +49,9 @@ def load(path: Path) -> dict:
     unknown = set(data) - {"mod", "mcm", "constant", "literal"}
     if unknown:
         raise SidecarError(f"{path}: unknown table(s) {sorted(unknown)}")
+    bad = set(data.get("mod", {})) - FIELDS_MOD
+    if bad:
+        raise SidecarError(f"{path}: [mod]: unknown field(s) {sorted(bad)}")
     for i, c in enumerate(data.get("constant", [])):
         if "name" not in c:
             raise SidecarError(f"{path}: constant #{i + 1} needs name")

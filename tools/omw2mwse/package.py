@@ -20,7 +20,8 @@ def _tree_hashes(root: Path) -> dict:
 
 def package(src: Path, out: Path, name: str | None = None, slug: str | None = None, with_runtime: bool = True,
             meshes_from: Path | None = None, force: bool = False, manifest: dict | None = None,
-            mode: str = "normal", sidecar: dict | None = None, confirm=None, title: str | None = None) -> dict:
+            mode: str = "normal", sidecar: dict | None = None, confirm=None, title: str | None = None,
+            credits: dict | None = None) -> dict:
     src, out = Path(src).resolve(), Path(out).resolve()
     if not src.is_dir():
         raise PackageError(f"source {src} is not a directory")
@@ -37,7 +38,7 @@ def package(src: Path, out: Path, name: str | None = None, slug: str | None = No
     w = Writer(out)
     res = build(src, w, name, data_prefix="Data Files", slug=slug, with_runtime=with_runtime,
                 meshes_from=[Path(meshes_from)] if meshes_from else None, mode=mode, sidecar=sidecar,
-                confirm=confirm, manifest=manifest, title=title)
+                confirm=confirm, manifest=manifest, title=title, credits=credits)
     rows = ["# Mesh aliases (R4: Morrowind record mesh paths are limited to 31 chars)",
             "# source (relative to Data Files/meshes)\talias (relative to Data Files/meshes)\tstatus"]
     rows += [f"{a}\t{b}\t{c}" for a, b, c in res.aliases]

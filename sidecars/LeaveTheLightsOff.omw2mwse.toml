@@ -3,10 +3,16 @@
 # default is always the author's value; this file only adds labels and ranges.
 # Used by: omw2mwse package/convert --mode hardcode (developer warning applies).
 
+[mod]
+title = "Leave The Lights Off"
+author = "OwnlyMe"
+license = "see the Nexus Mods permissions of the original (mod 57510)"
+url = "https://www.nexusmods.com/morrowind/mods/57510"
+
 [mcm]
 page = "Leave The Lights Off"
 group = "Tunables (hard-coded in the original)"
-description = "Leave The Lights Off by OwnlyMe, hosted on MWSE by omwcompat. These values were hard-coded by the author and exposed by omw2mwse; the defaults are the author's."
+description = "These values were hard-coded in the original and are exposed by omw2mwse; the defaults are the original values."
 
 [[literal]]
 key = "NIGHT_END_HOUR"

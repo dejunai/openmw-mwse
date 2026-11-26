@@ -26,6 +26,10 @@ def _mods_in(path: Path, corpus: bool) -> list[Path]:
     return sorted(p for p in path.iterdir() if p.is_dir() and not p.name.startswith("."))
 
 
+def _credits(a) -> dict:
+    return {"author": a.author, "license": a.license, "url": a.source_url}
+
+
 def cmd_scan(a) -> int:
     manifest = load_manifest(Path(a.manifest) if a.manifest else None)
     scans = []
@@ -59,7 +63,7 @@ def cmd_package(a) -> int:
 
         r = package(Path(a.src), Path(a.out), name=a.name, slug=a.slug, with_runtime=not a.no_runtime,
                     meshes_from=Path(a.meshes_from) if a.meshes_from else None, force=a.force,
-                    mode=mode, sidecar=sc, confirm=confirm, title=a.title)
+                    mode=mode, sidecar=sc, confirm=confirm, title=a.title, credits=_credits(a))
     except warn.Refused as e:
         print(f"omw2mwse: refused: {e}", file=sys.stderr)
         return EXIT_REFUSED
@@ -83,7 +87,7 @@ def cmd_convert(a) -> int:
         r = convert(Path(a.dir), a.mode, name=a.name, source=Path(a.source) if a.source else None,
                     sidecar_path=Path(a.sidecar) if a.sidecar else None, accept=a.accept_hardcode_conversions,
                     dry_run=a.dry_run, adopt=a.adopt_existing, with_runtime=not a.no_runtime,
-                    meshes_from=[Path(a.meshes_from)] if a.meshes_from else None)
+                    meshes_from=[Path(a.meshes_from)] if a.meshes_from else None, title=a.title, credits=_credits(a))
     except (BuildError, SC.SidecarError) as e:
         r = {"tool": "omw2mwse", "version": __version__, "command": "convert", "mode": a.mode, "dir": str(a.dir),
              "mods": [], "alerts": [{"level": "error", "code": "error", "message": str(e)}], "changed": False,
@@ -131,6 +135,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.set_defaults(func=cmd_scan)
 
     def hard_opts(p):
+        p.add_argument("--author", help="original author (credited; default from the sidecar [mod] table)")
+        p.add_argument("--license", help="original license / permissions (credited)")
+        p.add_argument("--source-url", help="original mod page (credited)")
         p.add_argument("--sidecar", help="<Mod>.omw2mwse.toml listing hard-coded values to expose")
         p.add_argument("--accept-hardcode-conversions", action="store_true",
                        help="accept the developer warning without a prompt (required when not interactive)")
@@ -155,6 +162,7 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--json", action="store_true", help="machine-readable result on stdout")
     c.add_argument("--dry-run", action="store_true", help="plan only; nothing is written (no prompt in hardcode mode)")
     c.add_argument("--name", help="mod name (default: the .omwscripts file name)")
+    c.add_argument("--title", help="display name (MCM entry, notices)")
     c.add_argument("--source", help="the OpenMW mod folder to use when the staged folder holds several")
     c.add_argument("--adopt-existing", action="store_true",
                    help="treat existing output files without an omw2mwse manifest as ours (first run on a hand-installed folder)")

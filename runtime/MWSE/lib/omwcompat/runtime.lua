@@ -810,6 +810,22 @@ function RT.reloadMod(m)
     return true
 end
 
+---------------------------------------------------------------- mwsuite notice
+-- Converted mods are maintained by mwsuite; original authors must not get support
+-- requests for them. Every generated MCM is listed under this prefix (MWSE's mod list
+-- is flat: there is no grouping mechanism, so the prefix keeps them together).
+RT.MCM_GROUP = "mwsuite - OpenMW"
+function RT.notice(m)
+    local c = m.credits or {}
+    local title = c.title or m.title or m.name
+    local author = c.author or "the original author"
+    local s = "Unofficial mwsuite conversion of " .. title .. " by " .. author .. " (OpenMW Lua hosted on MWSE by omwcompat). "
+        .. "Report issues to mwsuite / dej (dejunai), not to " .. author .. "."
+    if c.license then s = s .. " Original license: " .. c.license .. "." end
+    if c.url then s = s .. " Original: " .. c.url end
+    return s
+end
+
 ---------------------------------------------------------------- settings / MCM
 local function probeSettings(m)
     for _, spec in ipairs(m.spec.scripts) do instantiate(m, spec, true) end
@@ -819,7 +835,8 @@ function RT.onModConfigReady()
     RT.mcm = RT.mcm or {}
     for _, m in ipairs(mods) do
         if m.spec.probeSettings then probeSettings(m) end
-        local ok, summary = pcall(settings.buildMCM, m, { pageNote = m.cfgNote })
+        local ok, summary = pcall(settings.buildMCM, m, { pageNote = m.cfgNote, notice = RT.notice(m),
+            prefix = RT.MCM_GROUP .. ": " })
         if ok then
             RT.mcm[m.name] = summary
         else
@@ -852,7 +869,7 @@ function RT.register(spec)
     assert(type(spec) == "table" and spec.mod and spec.root and spec.scripts, "omwcompat.register: bad spec")
     local root = spec.root:gsub("\\", "/")
     if root:sub(-1) ~= "/" then root = root .. "/" end
-    local m = { name = spec.mod, title = spec.title, root = root, spec = spec, scripts = {}, storage = {}, meshmap = {} }
+    local m = { name = spec.mod, title = spec.title, credits = spec.credits, root = root, spec = spec, scripts = {}, storage = {}, meshmap = {} }
     for k, v in pairs(spec.meshmap or {}) do
         local nk = normMesh(k)
         m.meshmap[nk] = v
@@ -889,7 +906,7 @@ function RT.register(spec)
     end
     mods[#mods + 1] = m
     wire()
-    mwse.log("[omwcompat %s] registered %s (%d script(s))", RT.VERSION, m.name, #spec.scripts)
+    mwse.log("[omwcompat %s] registered %s (%d script(s)). %s", RT.VERSION, m.name, #spec.scripts, RT.notice(m))
     return m
 end
 

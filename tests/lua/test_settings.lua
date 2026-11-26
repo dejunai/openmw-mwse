@@ -66,10 +66,10 @@ section("generated MCMs")
 check(#W.mcm == 2, "two MCM templates registered (got " .. #W.mcm .. ")")
 local ltloT, synT
 for _, t in ipairs(W.mcm) do
-    if t.name == "Leave The Lights Off" then ltloT = t elseif t.name == "Synth Page" then synT = t end
+    if t.name == "mwsuite - OpenMW: Leave The Lights Off" then ltloT = t elseif t.name == "mwsuite - OpenMW: Synth Page" then synT = t end
 end
-check(ltloT ~= nil, "LTLO template titled 'Leave The Lights Off'")
-check(synT ~= nil, "synthetic template titled from l10n page name")
+check(ltloT ~= nil, "LTLO template listed as 'mwsuite - OpenMW: Leave The Lights Off'")
+check(synT ~= nil, "synthetic template: prefix + l10n page name")
 local controls = ltloT and mock.mcmControls(ltloT) or {}
 check(#controls == 11, "LTLO MCM has 11 controls (got " .. #controls .. ")")
 local function find(t, label) return mock.mcmFind(t, label) end
@@ -82,8 +82,20 @@ check(stale and stale.kind == "Slider" and stale.args.decimalPlaces == 2, "stale
 check(rain and rain.kind == "OnOffButton" and mock.mcmGet(rain) == false, "rain: on/off button, default off")
 check(endH and endH.description:find("Default: 7", 1, true) and endH.description:find("Applies immediately", 1, true), "night end description shows default and live apply")
 check(rain and rain.description:find("Applies when a save is loaded", 1, true), "rain description says it applies on reload")
-local cat = ltloT and ltloT.children[1] and ltloT.children[1].children[1]
+local page1 = ltloT and ltloT.children[1]
+local info1 = page1 and page1.children[1]
+local cat = page1 and page1.children[2]
 check(cat and cat.label == "Tunables (hard-coded in the original)", "LTLO category label from sidecar")
+local NOTICE = "Unofficial mwsuite conversion of Leave The Lights Off by OwnlyMe"
+check(info1 and info1.kind == "Info" and info1.text:find(NOTICE, 1, true) and info1.text:find("Report issues to mwsuite / dej (dejunai), not to OwnlyMe.", 1, true),
+    "first MCM item is the mwsuite support notice")
+check(page1 and page1.description:find(NOTICE, 1, true) == 1 and page1.description:find("nexusmods.com/morrowind/mods/57510", 1, true),
+    "page sidebar starts with the notice and credits the original")
+local logged = false
+for _, l in ipairs(W.logs) do
+    if l:find("registered LeaveTheLightsOff", 1, true) and l:find(NOTICE, 1, true) and l:find("not to OwnlyMe", 1, true) then logged = true end
+end
+check(logged, "MWSE.log registration line carries the notice")
 
 section("LTLO: day/night with defaults")
 mock.setHour(12)
