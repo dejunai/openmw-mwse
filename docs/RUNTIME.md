@@ -139,7 +139,8 @@ activation is also blocked when the target becomes invalid inside a handler, for
   "MW Conflict Tools". That mod hooks `mwse.registerModConfig` to capture templates the suite
   mods already built; converted mods all register through this one runtime, so the template is
   built directly at `modConfigReady`, one MWSE page (tab) per mod. Tab 1 is always the fixed
-  `Disclaimer` page (`C.DISCLAIMER`); mod tabs start at tab 2, sorted by original mod name. A
+  `Disclaimer` page (`C.DISCLAIMER`), including a no-redistribution paragraph (personal use only;
+  uploading or sharing a converted mod is forbidden); mod tabs start at tab 2, sorted by original mod name. A
   mod tab is always created, even with nothing to configure, and shows `Original mod:`,
   `Original author:` (or `unknown`), page/license when known, and the one support constant
   `C.SUPPORT` (in the sidebar and as the first item). Settings groups follow as categories. The

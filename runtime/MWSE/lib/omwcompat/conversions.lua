@@ -11,6 +11,10 @@ C.NAME = "MW Conversions"
 -- MWManager). tools/omw2mwse/build.py SUPPORT_LINE must match (a test checks it).
 C.SUPPORT = "Unofficial conversion by mwsuite. Do not contact the original author about it. "
     .. "Support: dej (dejunai) via the Nexus Mods forums."
+-- tools/omw2mwse/build.py NO_REDISTRIBUTION must match (a test checks it).
+C.NO_REDISTRIBUTION = "No redistribution. Converted mods are generated locally for personal use only. "
+    .. "Uploading, sharing or otherwise distributing a converted mod, in whole or in part, is forbidden. "
+    .. "The original mod remains subject to its author's own permissions."
 
 -- Tab 1 of the menu: the general notice. Fixed text, shown whenever any conversion is
 -- installed; the per-mod tabs follow it (from tab 2 on).
@@ -32,6 +36,7 @@ C.DISCLAIMER = {
         .. "implied. You use them at your own risk.",
     "Support. Please do not contact the original authors about problems with a converted mod. "
         .. "Support is provided by dej (dejunai) via the Nexus Mods forums.",
+    C.NO_REDISTRIBUTION,
 }
 
 -- what a tab shows about the original mod

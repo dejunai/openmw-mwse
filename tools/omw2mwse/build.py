@@ -359,6 +359,9 @@ MAINTAINER = "mwsuite / dej (dejunai)"
 # runtime/MWSE/lib/omwcompat/conversions.lua C.SUPPORT (tests/py checks this).
 SUPPORT_LINE = ("Unofficial conversion by mwsuite. Do not contact the original author about it. "
                 "Support: dej (dejunai) via the Nexus Mods forums.")
+NO_REDISTRIBUTION = ("No redistribution. Converted mods are generated locally for personal use only. "
+                    "Uploading, sharing or otherwise distributing a converted mod, in whole or in part, is forbidden. "
+                    "The original mod remains subject to its author's own permissions.")
 SUITE_DIR = "MWSE/mods/mwsuite/openmw"   # converted mods live at SUITE_DIR/<Mod>/
 
 
@@ -449,6 +452,8 @@ def render_readme(name: str, c: dict, mode: str, accepted: list) -> str:
              SUPPORT_LINE,
              f"Please do not send bug reports or support requests about this build to {author}: problems may come",
              "from the conversion, not from the original mod.", "",
+             "## Redistribution", "",
+             NO_REDISTRIBUTION, "",
              "## Credits", "",
              f"- Original mod: {c['title']} by {author}" + (f" ({c['url']})" if c.get("url") else ""),
              f"- Original license / permissions: {c.get('license') or 'see the original mod page'}",

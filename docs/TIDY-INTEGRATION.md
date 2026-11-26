@@ -145,7 +145,8 @@ MWManager packed it:
 
 (`SUPPORT_LINE` in `build.py`, `C.SUPPORT` in `conversions.lua`; a test keeps them equal.)
 In game all converted mods share one Mod Config entry, **MW Conversions**: tab 1 is a fixed
-general disclaimer, and every converted mod gets its own tab from tab 2 on, always, even with
+general disclaimer (including that converted mods are for personal use only and must not be
+redistributed), and every converted mod gets its own tab from tab 2 on, always, even with
 nothing to configure. Each tab shows the original mod name, original author and the support
 line. The same text goes in the MWSE.log registration line, the metadata, the README and the
 report. Mod name, author and page come from, in order: `--title` / `--author` / `--license` /

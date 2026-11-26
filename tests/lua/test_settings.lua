@@ -81,7 +81,10 @@ local dtext = {}
 for _, ch in ipairs(disc.children) do dtext[#dtext + 1] = ch.text end
 dtext = table.concat(dtext, "\n")
 for _, phrase in ipairs({ "experimental and unofficial", "retains all rights", "not affiliated with mwsuite", "without warranty of any kind",
-    "omw2mwse", "omwcompat", "dej (dejunai) via the Nexus Mods forums" }) do
+    "omw2mwse", "omwcompat", "dej (dejunai) via the Nexus Mods forums",
+    "No redistribution. Converted mods are generated locally for personal use only.",
+    "Uploading, sharing or otherwise distributing a converted mod, in whole or in part, is forbidden.",
+    "The original mod remains subject to its author's own permissions." }) do
     check(dtext:find(phrase, 1, true), "disclaimer says: " .. phrase)
 end
 local plainT = tpl.children[3]

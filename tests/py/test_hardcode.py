@@ -15,7 +15,7 @@ from omw2mwse import constants as K  # noqa: E402
 from omw2mwse import sidecar as SC  # noqa: E402
 from omw2mwse import warn  # noqa: E402
 from omw2mwse.cli import main, translate_tidy_flag  # noqa: E402
-from omw2mwse.build import SUPPORT_LINE  # noqa: E402
+from omw2mwse.build import NO_REDISTRIBUTION, SUPPORT_LINE  # noqa: E402
 from omw2mwse.convert import EXIT_CONFLICT, EXIT_OK, EXIT_REFUSED, convert  # noqa: E402
 from omw2mwse.scan import scan_mod  # noqa: E402
 
@@ -203,6 +203,7 @@ class Convert(unittest.TestCase):
             readme = (root / "MWSE" / "mods" / "mwsuite" / "openmw" / "Demo" / "README-mwsuite.md").read_text(encoding="utf-8")
             self.assertIn("Please do not send bug reports", readme)
             self.assertIn(SUPPORT_LINE, readme)
+            self.assertIn(NO_REDISTRIBUTION, readme)
             r = convert(root, "normal", credits={"author": "Someone", "license": "MIT", "url": "https://x"})
             meta = (root / "Demo-metadata.toml").read_text(encoding="utf-8")
             self.assertIn("(original author: Someone). " + SUPPORT_LINE + " Original license: MIT.", meta)
@@ -366,6 +367,14 @@ class Layout(unittest.TestCase):
         m = re.search(r'C\.SUPPORT = ((?:"[^"]*"\s*(?:\.\.\s*)?)+)', lua)
         self.assertIsNotNone(m)
         self.assertEqual("".join(re.findall(r'"([^"]*)"', m.group(1))), SUPPORT_LINE)
+        m = re.search(r'C\.NO_REDISTRIBUTION = ((?:"[^"]*"\s*(?:\.\.\s*)?)+)', lua)
+        self.assertIsNotNone(m)
+        self.assertEqual("".join(re.findall(r'"([^"]*)"', m.group(1))), NO_REDISTRIBUTION)
+
+    def test_no_redistribution_in_disclaimer_and_readme(self):
+        lua = (ROOT / "runtime" / "MWSE" / "lib" / "omwcompat" / "conversions.lua").read_text(encoding="utf-8")
+        self.assertIn("No redistribution.", lua)
+        self.assertIn("personal use only", lua)
 
     def test_credits_detected_from_fomod_info(self):
         with tempfile.TemporaryDirectory() as t:
