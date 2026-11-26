@@ -108,3 +108,32 @@ during play, so MWSE writes them to the save.
 A handler that returns `false` stops the chain and blocks the vanilla activation. The vanilla
 activation is also blocked when the target becomes invalid inside a handler, for example
 `remove()`. omwcompat's own `actor:activate(original)` call in R3 passes straight through to vanilla.
+
+## Settings (0.2)
+
+`omwcompat.settings` emulates `I.Settings` and `openmw.storage`:
+
+- `registerPage` and `registerGroup` record pages and groups. The renderers `checkbox`,
+  `number` (min/max/integer), `select` (items, l10n), `textLine` and `color` (hex text) get
+  native MCM controls. `inputBinding` is shown as info only. Custom renderers fall back to a
+  control chosen by the default value's type.
+- Storage sections named after a settings group are kept in
+  `MWSE/config/omwcompat_<Mod>.json` (`mwse.loadConfig`/`saveConfig`), not in the save. Other
+  sections stay in the mod's save payload. `subscribe` callbacks run on the next frame after
+  every `set`, including MCM edits. Old subscribers are dropped on load.
+- At `modConfigReady`, mods with `probeSettings = true` run their declared scripts once in
+  probe mode: openmw modules other than storage, interfaces, util, core.l10n and
+  async:callback are inert stand-ins, and `API_REVISION` reads 100. That collects the groups
+  even from PLAYER/MENU scripts that omwcompat cannot host yet. Their MCM then says changes
+  have no effect in game.
+- **MCM naming:** MWSE's Mod Config list is flat. `mwse.mcm.createTemplate` takes a `name`
+  and an optional header image, and categories exist only inside a page, so there is no way
+  to group mods in the list. Every generated template is therefore named
+  `mwsuite - OpenMW: <title>`. The first page starts with the mwsuite support notice (an info
+  item and the sidebar text). The same notice ends the MWSE.log registration line.
+- Hard-coded values that omw2mwse converted call `omwcompat.cfg(key, original)`, which reads
+  the `omw2mwse_<Mod>` group (and falls back to the original value when the stored type is
+  wrong). `apply = "live"` values are read on every evaluation. For `apply = "reload"` values,
+  closing the MCM after a change reloads the mod's scripts in place: `onSave`, then the chunk
+  runs again, then `onLoad(saved)`. Activation handlers, subscribers and named timers are
+  rebound, and `onObjectActive` refires for active objects.

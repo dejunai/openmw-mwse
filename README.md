@@ -50,6 +50,18 @@ are reported by `scan` as blockers. Docs:
 The `reference/`, `corpus/` and `staging/` folders are local only and git-ignored. Third-party mods
 are personal test material and are not redistributed here.
 
+## 0.2: settings, MCMs, hard-coded values, tidy entry point
+
+- OpenMW settings (`I.Settings`, `openmw.storage`) become an MWSE MCM named
+  `mwsuite - OpenMW: <title>`. See docs/RUNTIME.md.
+- `omw2mwse convert <staged-mod-dir> --mode normal|hardcode --json` (or
+  `--convert-omwscripts[=MODE]`) converts in place and is idempotent. See
+  docs/TIDY-INTEGRATION.md.
+- Hard-coded values are exposed through a sidecar (`sidecars/LeaveTheLightsOff.omw2mwse.toml`),
+  after a developer-only warning.
+- Every build is marked as an unofficial mwsuite conversion: report issues to
+  mwsuite / dej (dejunai), not to the original author.
+
 ## License
 
 MIT, Copyright (c) 2026 dej (dejunai). See [LICENSE](LICENSE). The mods hosted by

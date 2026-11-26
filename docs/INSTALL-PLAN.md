@@ -1,4 +1,8 @@
-# Install plan: Leave The Lights Off via omwcompat (next phase, NOT done yet)
+# Install plan: Leave The Lights Off via omwcompat (0.1)
+
+> Superseded for 0.2 by [INSTALL-DELTA-0.2.md](INSTALL-DELTA-0.2.md). Steps 1-3 were run on
+> 2026-11-25 at 18:33 PT, but the generated `main.lua` did not stay in VST (the hand port is
+> still active). The migration helper is dropped: no save migration, ever.
 
 Nothing in this plan has been run on Dej's PC. Every step below writes to the PC, so each one
 needs Dej's go-ahead. The facts below were checked read-only on 2026-11-25 (America/Los_Angeles).

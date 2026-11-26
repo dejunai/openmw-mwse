@@ -1,4 +1,4 @@
-# Known gaps and risks (omwcompat 0.1.0 + LTLO)
+# Known gaps and risks (omwcompat 0.2.0 + LTLO)
 
 ## What has been verified, and only on the box
 
@@ -69,3 +69,23 @@
 ## Scanner limits
 
 See [COVERAGE.md](COVERAGE.md#scanner-limits).
+
+## Settings and hard-coded values (0.2)
+
+- The generated MCM was checked only against a recording mock of `mwse.mcm`. In game, check
+  that sliders with `decimalPlaces` and `createCustom` variables behave as the mock assumes.
+- The settings probe runs PLAYER/MENU scripts with inert stand-ins. A script that needs real
+  values at top level (string ops on engine data, version gates) stops early, and the
+  groups it had not registered yet are missing from the MCM. The probe logs this as a warning.
+- The "hosted" note is per mod: if the mod has any GLOBAL script, its MCM does not warn,
+  even when a setting is read only by a PLAYER script.
+- `reload`-type tunables rerun the mod's chunk while a game is loaded. For LTLO this was
+  checked in the mock (no errors, state restored through onSave/onLoad). Other mods with
+  side effects at top level could repeat them.
+- LTLO candidates not exposed: `transition < 0.5` (weather blend threshold, internal) and
+  the light whitelist/blacklist tables (record ids, so editing them breaks lookups). Clear,
+  Cloudy and Snow stay non-dark (the author's choice). Unsafe to convert, and refused or
+  never auto-picked by omw2mwse: state variables reassigned at runtime (`lightIndex`,
+  `wasNight`, `shouldRun`, `weatherUpdater`, `darkWeather`), the unused `dlrInstalled`, and
+  string constants used as ids.
+- If Night ends >= Night starts, it is always night. The MCM does not cross-check the two.
