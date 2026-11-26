@@ -29,6 +29,7 @@ from pathlib import Path
 from . import __version__
 from . import constants as K
 from . import sidecar as SC
+from .plugins import classify_root_plugins
 from .scan import ModScan, find_lua_files, find_omwscripts, normalize_mesh, read_text, render_markdown, scan_mod
 
 HERE = Path(__file__).resolve().parent
@@ -597,6 +598,7 @@ class BuildResult:
     mod_rel: str = ""
     off_copied: list = field(default_factory=list)  # original-package relative paths
     plugins_renamed: list = field(default_factory=list)  # (original rel, Data Files root rel)
+    plugins: list = field(default_factory=list)  # root-level plugins, each with optional flag
 
 
 def build(src: Path, writer: Writer, name: str, *, data_prefix: str = "", slug: str | None = None,
@@ -773,6 +775,7 @@ def build(src: Path, writer: Writer, name: str, *, data_prefix: str = "", slug: 
         if e["status"] not in ("full", "partial"):
             res.alerts.append({"level": "warning", "code": "settings-renderer-fallback", "renderer": r, "count": e["count"],
                                "message": f"settings renderer {r} ({e['status']}) is shown with a fallback MCM control"})
+    res.plugins = classify_root_plugins(src, originals, res.plugins_renamed, texts)
     res.report_md = render_report(res, mode)
     return res
 
@@ -798,6 +801,13 @@ def render_report(res: BuildResult, mode: str) -> str:
             rep += [f"  - risk: {r}" for r in c.risks]
     if res.hard and res.hard.log:
         rep += ["", "## Hard-code decisions", ""] + [f"- {x}" for x in res.hard.log]
+    if res.plugins:
+        rep += ["", "## Plugins at the Data Files root", ""]
+        for pl in res.plugins:
+            flag = "optional" if pl["optional"] else "required"
+            srcn = f" (from `{pl['source']}`)" if pl.get("source") and pl["source"] != pl["name"] else ""
+            rep.append(f"- `{pl['name']}`{srcn}: **{flag}**. {pl['reason']}")
+        rep.append("")
     if res.notes:
         rep += ["", "## Notes", ""] + [f"- {n}" for n in res.notes]
     if res.off_copied:

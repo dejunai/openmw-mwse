@@ -238,6 +238,7 @@ def convert(staged: Path, mode: str = "normal", *, name: str | None = None, sour
             "files": {rel: w.status.get(rel, "?") for rel in sorted(set(w.plan) | {r for r, s in w.status.items() if s == "removed"})},
             "newGameRequired": False,
             "notice": notice_text(res.credits),
+            "plugins": res.plugins,
         })
         if "text" in warning_box:
             entry["warning"] = warning_box["text"]
@@ -273,7 +274,7 @@ def convert(staged: Path, mode: str = "normal", *, name: str | None = None, sour
                 pass
         files = {rel: sha256b(data) for rel, data in w.plan.items()}
         man = {"tool": "omw2mwse", "version": __version__, "mod": modname, "source": entry["source"], "mode": mode,
-               "files": files}
+               "files": files, "plugins": res.plugins}
         man_bytes = text_bytes(json.dumps(man, indent=1, sort_keys=True) + "\n")
         man_changed = not (mp.is_file() and mp.read_bytes() == man_bytes)
         if not dry_run and man_changed:

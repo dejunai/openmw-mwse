@@ -1,7 +1,18 @@
 # Calling omw2mwse from tidy
 
 Conflict Tools' tidy pass (separate repo, not modified here) converts OpenMW Lua mods it
-finds in staged plugin folders by calling omw2mwse. This note is the contract.
+finds in staged plugin folders by calling omw2mwse. This note is the contract. Tidy and
+omw2mwse have agreed on the following, as well as the invocation and JSON below:
+
+- tidy reads `mods[].verdict`. `blocked` means tidy removes the conversion output;
+  `partial` counts as converted. omw2mwse still exits 0 for a blocked mod (`status` is
+  `ok` and the blockers are in `mods[].alerts`); the verdict is the signal, not the
+  exit code.
+- tidy passes `--title` and `--author` (and `--license` / `--source-url` when it has
+  them) so the MCM tab does not say "original author: unknown".
+- tidy no longer renames plugins. omw2mwse already installs a root-level `.omwaddon`
+  as `.esp` (and `.omwgame` as `.esm`); see "Plugins at the Data Files root".
+- tidy `--undo` uses `omw2mwse-manifest.json` until an `omw2mwse revert` command exists.
 
 ## Invocation
 
@@ -33,9 +44,10 @@ byte-identical. An external `--source` is copied, not deleted. If the package is
 already at `Off/<plugin>/OpenMW/`, nothing is relocated. A second run is a no-op.
 
 Game-loadable assets from the original package (`meshes/`, `textures/`, `icons/`,
-`sounds/`, `music/`, `fonts/`, `splash/`, `video/`, `bookart/`, and loose
-`.esp`/`.esm`/`.bsa`/`.omwaddon`/`.omwgame`) are also installed at the Data Files
-root so Morrowind / MWSE can load them. Hosted (possibly rewritten) Lua stays in
+`Sound/` or `sounds/`, `music/`, `fonts/`, `splash/`, `video/`, `bookart/`, and loose
+`.esp`/`.esm`/`.bsa`) are also installed at the Data Files root so Morrowind / MWSE
+can load them. A root-level `.omwaddon` is installed as `.esp` (`.omwgame` as `.esm`);
+the original file stays under `Off/<Mod>/OpenMW/`. Hosted (possibly rewritten) Lua stays in
 `MWSE/mods/mwsuite/openmw/<Mod>/omw/`. Generated files (the loader, aliases, runtime, metadata, reports)
 are never written under `Off/`.
 
@@ -47,9 +59,10 @@ are never written under `Off/`.
 | `MWSE/mods/mwsuite/openmw/<Mod>/omw/_original/...` | verbatim originals of files rewritten for hard-coded values |
 | `MWSE/mods/mwsuite/openmw/<Mod>/README-mwsuite.md` | notice: unofficial mwsuite conversion, support goes to dej (dejunai) via the Nexus forums, credits |
 | `MWSE/mods/mwsuite/openmw/<Mod>/OMW2MWSE-REPORT.md` | human-readable report |
-| `MWSE/mods/mwsuite/openmw/<Mod>/omw2mwse-manifest.json` | files omw2mwse owns, with SHA-256 (used for idempotency) |
+| `MWSE/mods/mwsuite/openmw/<Mod>/omw2mwse-manifest.json` | files omw2mwse owns (SHA-256) and `plugins` (optional flag); tidy `--undo` uses this |
 | `MWSE/lib/omwcompat.lua`, `MWSE/lib/omwcompat/` | runtime (skip with `--no-runtime`) |
-| `meshes/`, `textures/`, ... | original game assets, also kept under `Off/<Mod>/OpenMW/` |
+| `meshes/`, `textures/`, `Sound/`, ... | original game assets, also kept under `Off/<Mod>/OpenMW/` |
+| `<Name>.esp` / `<Name>.esm` | root-level plugins, including an `.omwaddon` installed under an `.esp` name |
 | `meshes/omwc/<slug>/<hash>.nif` | short aliases for mesh paths longer than 31 chars, copied from `meshes/` in the folder |
 | `<Mod>-metadata.toml` | MWSE metadata with the notice in its description |
 
@@ -113,6 +126,11 @@ omw2mwse outputs, such as `MWSE/mods/LTLOHandportMigration/`, are never deleted.
    "files": {"MWSE/mods/mwsuite/openmw/LeaveTheLightsOff/main.lua": "created"},
    "newGameRequired": false,
    "notice": "Unofficial mwsuite conversion of ... (original author: ...). Unofficial conversion by mwsuite. Do not contact the original author about it. Support: dej (dejunai) via the Nexus Mods forums.",
+   "plugins": [
+     {"name": "No Fires in Bad Weather.esp", "source": "No Fires in Bad Weather.omwaddon",
+      "kind": "esp", "optional": false,
+      "reason": "hosted Lua references getGlobalScript("wetfire_weather_monitor")"}
+   ],
    "alerts": [
      {"level": "info", "code": "hardcode-candidate", "file": "scripts/LeaveTheLightsOff/LTLO_g.lua",
       "line": 396, "kind": "literal", "context": "clockHour < 7", "type": "number", "value": "7",
@@ -134,6 +152,67 @@ location. A `--dry-run` reports `willRelocateTo` instead and writes nothing.
 `MWSE/config/omwcompat_<Mod>.json`, not in the save. Switching an existing save from some
 other implementation of the same mod (such as Dej's LTLO hand port) is a separate matter; omw2mwse
 cannot tell, so tidy should say so when it replaces a non-omw2mwse `main.lua` (the `conflict` case).
+
+## Plugins at the Data Files root
+
+Every plugin the converter *emits or leaves* at the staged-mod root (a loose `.esp`/`.esm`,
+or a root-level `.omwaddon`/`.omwgame` installed as `.esp`/`.esm`) is listed in
+`mods[].plugins` and in `omw2mwse-manifest.json` under `plugins`. Tidy should enable or
+skip a plugin from the `optional` flag, not from the filename. The list is empty when
+the package has no root-level plugin (for example a Lua-only mod, or a plugin that
+lives only under `optional/` and was therefore not installed at the Data Files root).
+
+Each entry is:
+
+```json
+{"name": "wildlife_getfight.esp", "source": "wildlife_getfight.esp",
+ "kind": "esp", "optional": true,
+ "reason": "hosted Lua does not reference a record this plugin defines (ll_fight_token, ll_getfight)"}
+```
+
+- `name`: the file at the Data Files root (after any `.omwaddon` -> `.esp` rename).
+- `source`: the filename in the original package (`Fires.omwaddon` when `name` is `Fires.esp`).
+- `kind`: `esp` or `esm`.
+- `optional`: boolean. `true` means tidy should not auto-enable the plugin.
+- `reason`: a short, rule-based explanation (also copied into `OMW2MWSE-REPORT.md`).
+
+### When a plugin is optional
+
+A plugin is **optional** if either of the following holds; otherwise it is **required**.
+
+1. **The hosted Lua does not need it.** omw2mwse parses the TES3 file and collects the
+   record ids the plugin *defines* (introduces), not merely overrides on a master:
+   always `SCPT`, `SSCR` and `GLOB`; and any other named record, except that when the
+   plugin lists masters, an object record (`CREA`, `NPC_`, `LIGH`, ...) whose only hook
+   is a `SCRI` pointing at a script defined in the same plugin is treated as a master
+   override (the Wildlife `wildlife_getfight.esp` pattern: it attaches `ll_getfight` to
+   vanilla creatures). Those override ids are ignored, so a Lua table of vanilla
+   creature ids does not make the hook ESP required.
+
+   It then looks at the hosted Lua for references to those defined ids:
+   `getGlobalScript("id")` and other string literals in code that actually runs under
+   omwcompat. Branches proven dead from a constant `core.API_REVISION` comparison are
+   skipped. omwcompat reports `API_REVISION = 70`, so an
+   `if core.API_REVISION < 59 then ...` (or `local old_API = core.API_REVISION < 59`
+   / `if old_API then`) path is not a dependency of the conversion. That is why
+   `wildlife_getfight.esp` is optional: `ll_fight_token` is only read in the old-API
+   branch, and `ll_getfight` is never referenced. `No Fires in Bad Weather.esp` is
+   required: the Lua calls `getGlobalScript("wetfire_weather_monitor")`, and that
+   script is defined by the plugin.
+
+   If a TES3 file cannot be parsed, the plugin is **required** (`reason` says so).
+
+2. **The package marks it optional.** Any of: the original path is under `optional/`,
+   `optionals/` or `legacy/`; a FOMOD `ModuleConfig.xml` lists the file in
+   `optionalFileGroups` and not in `requiredInstallFiles`; or a readme / top-level
+   `.txt`/`.md` names the plugin and, in the nearby lines, calls it optional, legacy,
+   only needed for an older OpenMW, or not required. This rule applies even if Lua
+   also references the plugin (tidy should still not auto-enable a file the author
+   shipped as an option).
+
+A plugin that lives only under `optional/` is not installed at the Data Files root
+(game assets must sit at the package root to be installed there), so it does not
+appear in `plugins` at all.
 
 ## Credits and the support notice
 
