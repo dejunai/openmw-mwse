@@ -1,4 +1,4 @@
-"""Command line entry point: `python -m omw2mwse scan|package|convert|recover ...`.
+"""Command line entry point: `python -m omw2mwse scan|package|convert|recover|api-audit ...`.
 
 Tidy-style invocation is also accepted:
     omw2mwse --convert-omwscripts[=normal|hardcode] <staged-mod-dir> [convert options]
@@ -16,6 +16,7 @@ from . import sidecar as SC
 from . import warn
 from .build import BuildError
 from .convert import EXIT_ERROR, EXIT_REFUSED, MODES, convert
+from . import apicatalog as AC
 from . import recovery as RC
 from .package import PackageError, package
 from .scan import load_manifest, render_markdown, scan_mod
@@ -31,12 +32,25 @@ def _credits(a) -> dict:
     return {"author": a.author, "license": a.license, "url": a.source_url}
 
 
+def _catalog(a):
+    """The OpenMW API catalog for scan/api-audit: --openmw/--openmw-src, else $OMW2MWSE_OPENMW, the newest
+    cached download, then common install paths. (None, searched) when there is none."""
+    explicit = getattr(a, "openmw", None) or getattr(a, "openmw_src", None)
+    if getattr(a, "no_openmw", False):
+        return None, []
+    return AC.locate(explicit, cache_root=getattr(a, "api_cache", None),
+                     use_installs=not getattr(a, "no_installs", False))
+
+
 def cmd_scan(a) -> int:
     manifest = load_manifest(Path(a.manifest) if a.manifest else None)
+    catalog, _searched = _catalog(a)
+    if (a.openmw or a.openmw_src) and catalog is None and not a.no_openmw:
+        print(f"omw2mwse: no OpenMW API files under {a.openmw or a.openmw_src}; scanning without them", file=sys.stderr)
     scans = []
     for p in a.paths:
         for m in _mods_in(Path(p), a.corpus):
-            scans.append(scan_mod(m, manifest))
+            scans.append(scan_mod(m, manifest, catalog=catalog))
     if a.json:
         print(json.dumps([s.to_dict() for s in scans], indent=1))
     else:
@@ -161,6 +175,41 @@ def cmd_recover(a) -> int:
     return r["exitCode"]
 
 
+def cmd_api_audit(a) -> int:
+    """Compare manifest.json with OpenMW's own Lua API files (read only; a no-op without a copy)."""
+    if a.fetch:
+        try:
+            dest = AC.fetch(a.fetch, cache_root=a.api_cache, refresh=a.refresh)
+        except AC.FetchError as e:
+            print(f"omw2mwse: {e}", file=sys.stderr)
+            return EXIT_ERROR
+        a.openmw = str(dest)
+    catalog, searched = _catalog(a)
+    if catalog is None:
+        r = AC.not_found(searched)
+    else:
+        r = AC.audit(catalog, load_manifest(Path(a.manifest) if a.manifest else None), limit=a.limit)
+    if a.json:
+        print(json.dumps(r, indent=1))
+    else:
+        sys.stdout.write(AC.render(r))
+    return 0
+
+
+def _openmw_opts(p, fetch: bool = False) -> None:
+    p.add_argument("--openmw", metavar="DIR", help="an OpenMW install, source tree or api-audit cache folder")
+    p.add_argument("--openmw-src", metavar="DIR", help="an OpenMW source tree (files/lua_api/openmw); same as --openmw")
+    p.add_argument("--api-cache", metavar="DIR", help=f"cache root for downloaded API files (default ${AC.ENV_CACHE}, "
+                   "else the user cache folder)")
+    p.add_argument("--no-installs", action="store_true", help="do not look for an OpenMW install")
+    if fetch:
+        p.add_argument("--fetch", metavar="TAG", help="download the API files of this release tag (e.g. openmw-0.51.0) "
+                       "into the cache first (only those files)")
+        p.add_argument("--refresh", action="store_true", help="download again even when the cache has the tag")
+    else:
+        p.add_argument("--no-openmw", action="store_true", help="do not use OpenMW's API files even if found")
+
+
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="omw2mwse", description="Scan, package and convert OpenMW Lua mods for MWSE (omwcompat).")
     ap.add_argument("--version", action="version", version=f"omw2mwse {__version__}")
@@ -173,7 +222,15 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--title", default="omw2mwse scan")
     s.add_argument("--manifest")
     s.add_argument("--strict", action="store_true", help="exit 1 if any mod is blocked")
+    _openmw_opts(s)
     s.set_defaults(func=cmd_scan)
+
+    au = sub.add_parser("api-audit", help="compare the omwcompat manifest with OpenMW's own Lua API files")
+    au.add_argument("--json", action="store_true")
+    au.add_argument("--manifest")
+    au.add_argument("--limit", type=int, default=0, help="at most N entries in the long lists (default: all)")
+    _openmw_opts(au, fetch=True)
+    au.set_defaults(func=cmd_api_audit)
 
     def hard_opts(p):
         p.add_argument("--author", help="original author (credited; default from the sidecar [mod] table)")

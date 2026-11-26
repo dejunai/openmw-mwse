@@ -10,3 +10,6 @@ __pycache__/
 # generated Vortex archive (contains third-party meshes; rebuild with scripts/package-ltlo-archive.sh)
 /dist-archives/
 /build-ltlo-archive/
+
+# OpenMW Lua API files fetched by `omw2mwse api-audit --fetch` (GPLv3): local cache only, never committed
+/openmw-api-cache/

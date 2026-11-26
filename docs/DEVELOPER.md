@@ -63,6 +63,65 @@ OMW2MWSE-REPORT.md                           scan + file list with hashes
   `PATTERN_NOTES` text), the guard in `guards.lua` (`KNOWN`, `RULE_IDS`, `apply`), tests on
   both sides. Never patch a mod's Lua.
 
+## Scanner rules and the OpenMW API audit (0.2.5)
+
+Scanner (`tools/omw2mwse/scan.py`, value tables in `tools/omw2mwse/apitypes.py`, our own):
+
+- `local ok, X = pcall(require, 'openmw.x')` and `pcall(function() return require('openmw.x') end)`
+  alias `X` like a plain `require`; the module is listed in `guardedRequires` with a warning
+  (the mod checks whether it exists). An unsupported module is still a blocker.
+- Aliases come from `local a = <chain>` with exactly one target and from positional multiple
+  assignment (`local p, c = self.position, self.cell`). Table keys (`{ type = ui.TYPE.X, }`) and
+  field targets (`t.x = core.sound`) are not aliases.
+- A member below a manifest entry no longer inherits the parent's status. It inherits only below
+  an `unsupported` entry or for an ALL_CAPS enum leaf. Otherwise it is looked up through the
+  parent's value type (`self.rotation` -> Transform, `self.cell` -> Cell, `recordId` -> string;
+  `MEMBER_TYPES`, `TYPE_MEMBERS`), and `openmw.self.type.X` is classified as
+  `openmw.types.Actor.X`. Anything not in our tables is `unlisted`: a warning, not a blocker, and
+  not counted as covered.
+- Method calls on typed values are counted in `typedMethods`: `Cell:getAll`, `Inventory:countOf`,
+  `Transform:getAnglesZYX`, `StorageSection:get`, `Type.createRecordDraft`, ... The receiver type
+  comes from the chain or a local (`local inv = types.Actor.inventory(o)`, `apitypes.returns`).
+  With no known receiver, only distinctive names count, as `?:<name>` (best status of the types
+  that have it). Plain Lua string methods are never counted. Unsupported ones are blockers
+  (`unsupported method Inventory:getAll (1x)`); partial ones are `partialApis` kind `typedMethod`.
+
+OpenMW API audit (`tools/omw2mwse/apicatalog.py`). This is optional: nothing needs it, and
+`scan`/`convert` give the same verdicts without it.
+
+```sh
+bin/omw2mwse api-audit --fetch openmw-0.51.0          # download the stubs of one tag into the cache, then audit
+bin/omw2mwse api-audit --openmw-src ~/src/openmw      # an OpenMW source tree (files/lua_api/openmw)
+bin/omw2mwse api-audit --openmw "C:/Games/OpenMW 0.51.0"   # an install (resources/lua_api/openmw)
+bin/omw2mwse api-audit --json --limit 0               # full lists as JSON
+bin/omw2mwse scan path/to/mod --no-openmw             # scan without the catalog
+```
+
+- Lookup order: `--openmw` / `--openmw-src`, `$OMW2MWSE_OPENMW` (`none` turns the lookup off),
+  the newest version in the cache, then common install paths: `OpenMW*` under Program Files and
+  under `X:\`, `X:\Games` and `X:\Program Files` for drives C-H, Linux/macOS paths, and the
+  parents of the `data=`/`resources=` lines of the user's `openmw.cfg`. `--no-installs`
+  skips the install paths. Nothing found: `api-audit` prints that and exits 0; `scan` runs as
+  before.
+- Cache: `--api-cache DIR`, `$OMW2MWSE_API_CACHE`, else `%LOCALAPPDATA%/omw2mwse/openmw-api` or
+  `~/.cache/omw2mwse/openmw-api` (`$XDG_CACHE_HOME`). `--fetch TAG` lists
+  `files/lua_api/openmw` at that tag through the GitHub contents API, downloads only those `.lua`
+  files from raw.githubusercontent.com into `<cache>/<version>/files/lua_api/openmw/`, and writes
+  `SOURCE.json` (tag, version, API revision read in memory from that tag's `CMakeLists.txt`, and
+  sha256 of each file). An earlier complete download is reused; `--refresh` downloads again.
+- **Never commit or vendor OpenMW's API files.** They are GPLv3. They are read at run time from
+  the user's own copy only. `/openmw-api-cache/` is git-ignored for a cache inside the clone. The
+  tests use `tests/fixtures/openmw-api-stubs`, a tiny stub set we wrote ourselves in the same
+  tag format.
+- With a catalog, `scan` adds `apiCatalog`, `inOpenMW` per symbol and typed method, and
+  `unknownToOpenMW`, plus a warning per symbol OpenMW does not have. That usually means another
+  OpenMW version or a typo; interfaces are not judged, since mods add their own. `unlisted`
+  means only that omwcompat's tables do not list it. Verdicts never change. Contract and fields:
+  [TIDY-INTEGRATION.md](TIDY-INTEGRATION.md#scanner-fields-and-the-openmw-api-audit-025).
+- Tests: `tests/py/test_scanner_forms.py` (fixture `tests/fixtures/scanner-forms`, our own code
+  modeled on common OpenMW Lua patterns) and `tests/py/test_apiaudit.py` (parse, layouts,
+  lookup, fetch with a fake downloader, audit, CLI, scan with a catalog; no network).
+
 ## Further reading
 
 - [RUNTIME.md](RUNTIME.md): how the emulation works, local scripts, object-lifecycle rules.

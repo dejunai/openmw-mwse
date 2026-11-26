@@ -295,8 +295,8 @@ status is `partial`, so testers know what to try first in game. Additive; nothin
 - `api`: the dotted OpenMW name; GameObject methods are `GameObject:<name>`, script flags
   `scriptFlag:<FLAG>`, engine handlers `engineHandler:<name>`, settings renderers
   `settingsRenderer:<name>`.
-- `kind`: `symbol`, `method`, `scriptFlag`, `engineHandler`, `settingsRenderer` or `pattern`
-  (0.2.4, see below).
+- `kind`: `symbol`, `method`, `typedMethod` (0.2.5), `scriptFlag`, `engineHandler`,
+  `settingsRenderer` or `pattern` (0.2.4, see below).
 - `count`: total uses in the scripts that load (same counting as `coverage`).
 - `uses`: up to 20 distinct `{file, line}` (file relative to the package folder, forward
   slashes); `[]` for kinds whose position is not tracked (flags, handlers, renderers).
@@ -348,11 +348,76 @@ needs no change; it may show the `pattern` entries like any other partial API.
 Detection is per file and token based: it does not follow calls into helper functions, and
 table names are plain or dotted names (`list`, `S.list`), not expressions.
 
+## Scanner fields and the OpenMW API audit (0.2.5)
+
+All additive. `verdict`, `coverage` semantics and exit codes are unchanged. Tidy needs no change.
+
+New scan rules that can add blockers to `convert` and `scan` (both, with or without OpenMW):
+
+- A call on a typed value whose method omwcompat does not support is a blocker:
+  `unsupported method Inventory:getAll (1x)` (alert `blocker` in `convert`). Partial ones are
+  `partialApis` entries with `"kind": "typedMethod"` and `api` `Type:method` (`Cell:getAll`),
+  `?:method` (receiver unknown, distinctive names only) or `Type.createRecordDraft`.
+- Members of `openmw.self.type` are judged as `openmw.types.Actor.*` (so `self.type.getEquipment`
+  is reported as the unsupported API it is), and members of a value are judged by the value's
+  type (`openmw.self.cell.hasTag` is unsupported).
+
+New keys on every `scan --json` result (`convert` results keep their 0.2.4 keys plus the new
+blockers and partial entries above):
+
+```json
+"typedMethods": {"Inventory:countOf": {"status": "full", "count": 1,
+                 "uses": [{"file": "scripts/W/global.lua", "line": 12}], "inOpenMW": true}},
+"guardedRequires": ["openmw.interfaces", "openmw.animation"],
+"unlisted": ["openmw.self.position.nonsense"],
+"apiCatalog": {"root": "...", "layout": "source", "stubDir": "...", "version": "0.51.0",
+               "apiRevision": 129, "tag": "openmw-0.51.0", "files": 20, "symbols": 1826},
+"unknownToOpenMW": ["openmw.animation.addGlow"]
+```
+
+- `typedMethods`: method calls on typed values (see above). Each entry has `status`, `count`,
+  `uses`, and `inOpenMW` when a catalog is loaded.
+- `guardedRequires`: modules loaded with `pcall(require, ...)` (also a `warnings` line). The
+  mod checks whether the module exists.
+- `unlisted`: symbols below a known one that omwcompat's tables do not list. The status
+  `unlisted` (in `symbols[].status`) is non-blocking, is a `warnings` line, and does not count as
+  covered.
+- `apiCatalog`: the OpenMW API files used, or `null` when none was found or `--no-openmw` was
+  given.
+- `unknownToOpenMW`: symbols (and typed methods) those OpenMW API files do not have, usually
+  another OpenMW version or a typo. `[]` without a catalog. Each `symbols[]` entry then also has
+  `inOpenMW`: `true`, `false` or `null` (cannot tell: `openmw_aux.*`, interface members, opaque
+  references). Warning text: `openmw.types.Player.equipment (1x) is not in OpenMW 0.51.0's Lua API
+  (a typo, or an API of another OpenMW version)`.
+
+`omw2mwse api-audit [--openmw DIR | --openmw-src DIR] [--fetch TAG [--refresh]] [--api-cache DIR]
+[--no-installs] [--json] [--limit N]` compares omwcompat's manifest with OpenMW's own API files
+(see [DEVELOPER.md](DEVELOPER.md#scanner-rules-and-the-openmw-api-audit-025)). It always exits
+0; a failed `--fetch` exits 2. JSON:
+
+- `tool`, `version`, `command` (`api-audit`), `manifestVersion`.
+- `openmw`: `apiCatalog` plus `found`. When nothing was found: `{"found": false, "searched": [...]}`,
+  `counts` is `{}`, `notes` says how to point at a copy, and the other audit keys are absent.
+- `counts`: `openmwSymbols`, `manifestSymbols`, `listed` (in both), `namespace` (a parent of
+  listed entries), `belowListed` (members of a listed value), `unsupportedModule`,
+  `unclassified`, `unclassifiedTop` (subtrees), `stale`, `unverifiable`.
+- `unclassified`: top unclassified subtrees `{symbol, kind, size, scope?}`, largest first;
+  `unclassifiedByModule` and `unclassifiedByGroup`: counts.
+- `stale`: manifest entries OpenMW does not have `{symbol, ours}`. `unverifiable`: entries the
+  API files cannot confirm (`openmw_aux.*`, interface members).
+- `modules`: per OpenMW module, `contexts` (global/local/player/menu/load), `ours`,
+  `hostedKinds`, and `scopeMismatch` or `notInOpenMW` when they apply.
+- `scopeNotes`: APIs OpenMW limits to one script kind ("only from a global script")
+  `{symbol, scope, ours}`.
+- `gameObject`: `missingMethods`, `missingFields`, `staleMethods`, `staleFields`.
+- `typeMembers`: per value type, `missing` and `stale`. `interfaces`: `openmw`, `ours`,
+  `missing`, `notListed`. `notes`: what the audit does not cover.
+
 ## JSON result (abridged)
 
 ```json
 {
- "tool": "omw2mwse", "version": "0.2.4", "command": "convert", "mode": "normal",
+ "tool": "omw2mwse", "version": "0.2.5", "command": "convert", "mode": "normal",
  "dir": "...", "dryRun": false, "changed": true, "exitCode": 0, "alerts": [], "pendingRecovery": [],
  "mods": [{
    "name": "LeaveTheLightsOff", "source": "Off/LeaveTheLightsOff/OpenMW",

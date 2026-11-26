@@ -13,7 +13,8 @@ It has two parts:
 - **omw2mwse** - the converter. It scans an OpenMW mod, reports which `openmw.*` APIs it
   uses, and rewrites the mod's folder into an MWSE mod. It is normally run for you by
   conflict-tools' **tidy** on mods in your Vortex staging folder; it can also be run by hand
-  (see [docs/DEVELOPER.md](docs/DEVELOPER.md)).
+  (see [docs/DEVELOPER.md](docs/DEVELOPER.md)). `omw2mwse api-audit` optionally checks
+  omwcompat's API tables against OpenMW's own Lua API files (fetched on demand, never shipped).
 - **omwcompat** - an MWSE Lua runtime that provides the `openmw.*` API, so the mod's
   original Lua scripts run unmodified inside MWSE.
 

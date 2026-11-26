@@ -1,0 +1,2 @@
+GLOBAL: scripts/forms/global.lua
+NPC: scripts/forms/actor.lua

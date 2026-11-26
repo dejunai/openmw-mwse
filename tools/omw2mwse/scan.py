@@ -7,12 +7,15 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import apitypes as AT
 from .luatok import LuaSyntaxError, Token, tokenize
 
 HERE = Path(__file__).resolve().parent
 DEFAULT_MANIFEST = HERE.parent.parent / "runtime" / "MWSE" / "lib" / "omwcompat" / "manifest.json"
 
 OK_STATUSES = ("full", "partial", "stub", "interface", "local")
+# `unlisted`: a member below a manifest entry that none of our tables knows (apitypes.py); reported as a
+# warning, never a blocker, and not counted as covered.
 MESH_RE = re.compile(r"^meshes[/\\].+\.nif$", re.IGNORECASE)
 
 
@@ -64,6 +67,9 @@ class FileScan:
     local_requires: list[str] = field(default_factory=list)
     settings: list[dict] = field(default_factory=list)          # registerGroup declarations
     custom_renderers: list[str] = field(default_factory=list)   # registerRenderer names
+    typed: dict[str, int] = field(default_factory=dict)          # typed method key (Cell:getAll, ?:getAll) -> count
+    typed_lines: dict[str, list] = field(default_factory=dict)
+    guarded_requires: list[str] = field(default_factory=list)   # modules loaded through pcall(require, ...)
     error: str | None = None
 
 
@@ -88,6 +94,74 @@ def _require_at(toks: list[Token], i: int) -> tuple[str | None, int]:
     if i + 3 < len(toks) and toks[i + 1].value == "(" and toks[i + 2].kind == "string" and toks[i + 3].value == ")":
         return toks[i + 2].value, i + 4
     return None, i
+
+
+def _pcall_require_at(toks: list[Token], i: int) -> tuple[str | None, int]:
+    """`pcall(require, 'm')` or `pcall(function() return require('m') end)` at toks[i]: (module, index after)."""
+    n = len(toks)
+
+    def v(k):
+        return toks[k].value if k < n else None
+    if toks[i].kind != "name" or toks[i].value != "pcall" or v(i + 1) != "(":
+        return None, i
+    if v(i + 2) == "require" and v(i + 3) == "," and i + 4 < n and toks[i + 4].kind == "string" and v(i + 5) == ")":
+        return toks[i + 4].value, i + 6
+    if v(i + 2) == "function" and v(i + 3) == "(" and v(i + 4) == ")" and v(i + 5) == "return" and v(i + 6) == "require":
+        mod, after = _require_at(toks, i + 6)
+        if mod is not None and v(after) == "end" and v(after + 1) == ")":
+            return mod, after + 2
+    return None, i
+
+
+def _targets_before(toks: list[Token], eq: int) -> list[int]:
+    """Indexes of the assignment targets `a, b, c =` ending just before toks[eq] == '=' (plain names only)."""
+    if eq < 1 or toks[eq - 1].kind != "name":
+        return []
+    out, j = [eq - 1], eq - 1
+    while j >= 2 and toks[j - 1].value == "," and toks[j - 2].kind == "name":
+        j -= 2
+        out.append(j)
+    if j >= 1 and toks[j - 1].value in (".", ":", "]", "{", ",", ";"):
+        return []  # a field (a.b = ...) or a table constructor key ({ k = ... })
+    return out[::-1]
+
+
+def _plain_exprs_after(toks: list[Token], eq: int) -> list[tuple[int, int]] | None:
+    """`x.a.b, y.c` after '=': [(start, end)] when every expression is a plain name chain, else None."""
+    out, j, n = [], eq + 1, len(toks)
+    while True:
+        if j >= n or toks[j].kind != "name":
+            return None
+        start = j
+        j += 1
+        while j + 1 < n and toks[j].value == "." and toks[j + 1].kind == "name":
+            j += 2
+        if j < n and toks[j].value in ("(", "[", "{", ":", ".") or (j < n and toks[j].kind == "string"):
+            return None
+        out.append((start, j))
+        if j < n and toks[j].value == ",":
+            j += 1
+            continue
+        return out
+
+
+def _chain_head(toks: list[Token], k: int) -> int:
+    """Index of the first name of the `a.b.c` chain whose last name is toks[k]."""
+    while k >= 2 and toks[k - 1].value in (".", ":") and toks[k - 2].kind == "name":
+        k -= 2
+    return k
+
+
+def _open_paren(toks: list[Token], close: int) -> int | None:
+    depth = 0
+    for k in range(close, -1, -1):
+        if toks[k].value == ")":
+            depth += 1
+        elif toks[k].value == "(":
+            depth -= 1
+            if depth == 0:
+                return k
+    return None
 
 
 def _table_keys(toks: list[Token], start: int) -> list[str]:
@@ -211,18 +285,35 @@ def scan_lua(src: str, path: str, method_names: set[str]) -> FileScan:
         return fs
     aliases: dict[str, str] = {}
     n = len(toks)
-    # pass 1: aliases from require(...) and `local X = alias.chain`
+    # pass 1: aliases from require(...), pcall(require, ...) and `local X = alias.chain`
     for i in range(n):
+        pmod, _pafter = _pcall_require_at(toks, i)
+        if pmod is not None:
+            if pmod not in fs.guarded_requires:
+                fs.guarded_requires.append(pmod)
+            is_openmw = pmod.startswith("openmw.") or pmod.startswith("openmw_aux.")
+            tg = _targets_before(toks, i - 1) if i >= 1 and toks[i - 1].value == "=" else []
+            if len(tg) >= 2:
+                aliases[toks[tg[1]].value] = pmod
+                fs.requires[toks[tg[1]].value] = pmod
+            elif is_openmw:
+                fs.requires.setdefault("<inline:" + pmod + ">", pmod)
+            if not is_openmw and pmod not in fs.local_requires:
+                fs.local_requires.append(pmod)
+            continue
         mod, after = _require_at(toks, i)
         if mod is None:
             continue
+        if i >= 6 and toks[i - 1].value == "return" and toks[i - 2].value == ")" and toks[i - 4].value == "function" \
+                and toks[i - 6].value == "pcall":
+            continue  # pcall(function() return require('m') end): handled above
         parts, after2, _ = _chain(toks, after - 1)
         full = ".".join([mod] + parts)
         is_openmw = mod.startswith("openmw.") or mod.startswith("openmw_aux.")
         if not is_openmw:
             fs.local_requires.append(mod)
         # assignment target
-        if i >= 2 and toks[i - 1].value == "=" and toks[i - 2].kind == "name":
+        if i >= 2 and toks[i - 1].value == "=" and len(_targets_before(toks, i - 1)) == 1:
             aliases[toks[i - 2].value] = full
             fs.requires[toks[i - 2].value] = full
         elif is_openmw:
@@ -236,11 +327,23 @@ def scan_lua(src: str, path: str, method_names: set[str]) -> FileScan:
         for i in range(2, n):
             t = toks[i]
             if t.kind == "name" and t.value in aliases and toks[i - 1].value == "=" and toks[i - 2].kind == "name" \
-                    and (i < 3 or toks[i - 3].value not in (".", ":")):
+                    and (i < 3 or toks[i - 3].value not in (".", ":", ",", "{", ";")):
                 parts, j, last = _chain(toks, i)
-                if parts and last == "." and (j >= n or toks[j].value not in ("(", "[", "{")) and toks[i - 2].value not in aliases:
+                if parts and last == "." and (j >= n or toks[j].value not in ("(", "[", "{", ",", "}")) \
+                        and toks[i - 2].value not in aliases:
                     aliases[toks[i - 2].value] = aliases[t.value] + "." + ".".join(parts)
                     changed = True
+            elif t.value == "=" and t.kind == "symbol":
+                # `local p, c = self.position, self.cell`: map targets to expressions by position
+                tg = _targets_before(toks, i)
+                ex = _plain_exprs_after(toks, i) if len(tg) > 1 else None
+                if not ex or len(ex) != len(tg):
+                    continue
+                for ti, (a, b) in zip(tg, ex):
+                    head, name = toks[a].value, toks[ti].value
+                    if head in aliases and b - a > 1 and name not in aliases:
+                        aliases[name] = aliases[head] + "." + ".".join(toks[k].value for k in range(a + 2, b, 2))
+                        changed = True
     # pass 2: uses
     for i, t in enumerate(toks):
         if t.kind == "name" and t.value in aliases:
@@ -266,6 +369,7 @@ def scan_lua(src: str, path: str, method_names: set[str]) -> FileScan:
             fs.method_lines.setdefault(toks[i + 1].value, []).append(toks[i + 1].line)
         elif t.kind == "string" and MESH_RE.match(t.value):
             fs.meshes.append(t.value)
+    _typed_methods(fs, toks, aliases, method_names)
     # handlers
     for i in range(n - 2):
         t = toks[i]
@@ -277,6 +381,118 @@ def scan_lua(src: str, path: str, method_names: set[str]) -> FileScan:
                 (fs.engine_handlers if t.value == "engineHandlers" else fs.event_handlers).extend(keys)
     fs.settings, fs.custom_renderers = _settings_groups(toks)
     return fs
+
+
+def _var_types(toks: list[Token], aliases: dict[str, str]) -> dict[str, str]:
+    """{local name: value type} for `x = <call of a symbol with a known return type>` and
+    `x = <anything>.cell / .rotation / .position ...` (one file, scopes ignored)."""
+    out: dict[str, str] = {}
+    n = len(toks)
+    for i in range(1, n - 1):
+        if toks[i].value != "=" or toks[i].kind != "symbol" or len(_targets_before(toks, i)) != 1:
+            continue
+        name = toks[i - 1].value
+        j = i + 1
+        if toks[j].kind != "name":
+            continue
+        head = toks[j]
+        k = j + 1
+        while k + 1 < n and toks[k].value == "." and toks[k + 1].kind == "name":
+            k += 2
+        last = toks[k - 1].value
+        if k < n and toks[k].value == "(" and head.value in aliases:
+            depth, m = 0, k
+            while m < n:
+                if toks[m].value == "(":
+                    depth += 1
+                elif toks[m].value == ")":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                m += 1
+            if m + 1 < n and toks[m + 1].value in (".", ":", "[", "("):
+                continue
+            sym = ".".join([aliases[head.value]] + [toks[x].value for x in range(j + 2, k, 2)])
+            t = AT.returns(sym)
+            if t:
+                out[name] = t
+        elif k - j > 1 and (k >= n or toks[k].value not in ("(", "[", ":", "{")) and head.value not in aliases:
+            t = AT.MEMBER_TYPES.get(last)
+            if t and t not in AT.NOT_TYPED_RECEIVERS:
+                out[name] = t
+    return out
+
+
+def _recv_type(toks: list[Token], i: int, aliases: dict[str, str], var_types: dict[str, str]):
+    """Type of the receiver of the `:` at toks[i]: a type name, None (unknown) or False (an alias
+    chain: already counted as a symbol)."""
+    p = i - 1
+    if p < 0:
+        return None
+    if toks[p].value == ")":
+        q = _open_paren(toks, p)
+        if q is None or q < 1 or toks[q - 1].kind != "name":
+            return None
+        h = _chain_head(toks, q - 1)
+        if toks[h].value in aliases and (h == 0 or toks[h - 1].value not in (".", ":")):
+            sym = ".".join([aliases[toks[h].value]] + [toks[x].value for x in range(h + 2, q, 2)])
+            return AT.returns(sym)
+        return None
+    if toks[p].kind != "name":
+        return None
+    h = _chain_head(toks, p)
+    if toks[h].value in aliases and (h == 0 or toks[h - 1].value not in (".", ":")):
+        return False
+    if h < p:
+        return AT.MEMBER_TYPES.get(toks[p].value)
+    return var_types.get(toks[p].value)
+
+
+def _typed_methods(fs: FileScan, toks: list[Token], aliases: dict[str, str], method_names: set[str]) -> None:
+    """Count method calls on values that are not GameObjects (Cell:getAll, Inventory:countOf, ?:getAll)
+    and `<type table>.createRecordDraft(...)` on a table the scanner cannot name."""
+    n = len(toks)
+    var_types = _var_types(toks, aliases)
+
+    def add(key, line):
+        fs.typed[key] = fs.typed.get(key, 0) + 1
+        fs.typed_lines.setdefault(key, []).append(line)
+    for i in range(n - 2):
+        t = toks[i]
+        if t.kind == "symbol" and t.value in (":", ".") and toks[i + 1].kind == "name" \
+                and (toks[i + 2].value in ("(", "{") or toks[i + 2].kind == "string"):
+            name = toks[i + 1].value
+            if t.value == ".":
+                if name in AT.TYPE_TABLE_FUNCS and i >= 1 and toks[i - 1].kind == "name":
+                    h = _chain_head(toks, i - 1)
+                    if not (toks[h].value in aliases and (h == 0 or toks[h - 1].value not in (".", ":"))):
+                        add("Type." + name, toks[i + 1].line)
+                continue
+            if name in method_names:
+                continue
+            rt = _recv_type(toks, i, aliases, var_types)
+            if rt is False or rt in AT.NOT_TYPED_RECEIVERS:
+                continue
+            if rt:
+                if name in AT.TYPE_METHODS.get(rt, ()) or name not in AT.LUA_BUILTIN_METHODS:
+                    add(f"{rt}:{name}", toks[i + 1].line)
+            elif name in AT.DISTINCTIVE_METHODS:
+                add("?:" + name, toks[i + 1].line)
+
+
+def typed_status(key: str, manifest: dict) -> tuple[str, dict]:
+    """(status, candidates) of a typed method key: `Cell:getAll`, `?:getAll`, `Type.createRecordDraft`."""
+    if key.startswith("Type."):
+        name = key[5:]
+        sts = [v for k, v in manifest["symbols"].items() if k.startswith("openmw.types.") and k.endswith("." + name)]
+        return (AT.best_status(sts) if sts else "unsupported"), {}
+    typ, _, name = key.partition(":")
+    if typ == "?":
+        cands = AT.methods_named(name)
+        if cands and all(v == "unsupported" for v in cands.values()):
+            return "unsupported", cands
+        return AT.best_status(cands.values()), cands
+    return AT.TYPE_MEMBERS.get(typ, {}).get(name, "unlisted"), {}
 
 
 def classify(symbol: str, manifest: dict) -> str:
@@ -301,7 +517,19 @@ def classify(symbol: str, manifest: dict) -> str:
     for k in range(len(parts), 1, -1):
         pref = ".".join(parts[:k])
         if pref in syms:
-            return syms[pref]
+            if k == len(parts):
+                return syms[pref]
+            # a member below a manifest entry: an unsupported entry's members are unsupported, an enum
+            # table's (ALL_CAPS) members are its constants; otherwise follow the entry's value type
+            # (self.rotation:getYaw -> Transform.getYaw) and never inherit the entry's own status
+            if syms[pref] == "unsupported" or re.fullmatch(r"[A-Z][A-Z0-9_]*", parts[k - 1]):
+                return syms[pref]
+            if pref == "openmw.self.type":
+                return classify("openmw.types.Actor." + ".".join(parts[k:]), manifest)
+            typ = AT.value_type(pref)
+            if typ is None:
+                return "unlisted"
+            return AT.member_status(typ, parts[k:], AT.game_object_members(manifest))
         if any(s.startswith(pref + ".") for s in syms) and k == len(parts):
             return "full"  # namespace value itself (e.g. types.Light passed as an argument)
     return "unsupported"
@@ -328,6 +556,9 @@ class ModScan:
     partial_apis: list[dict] = field(default_factory=list)
     patterns: list[dict] = field(default_factory=list)      # patterns.Finding.to_json(), file order
     guards: dict[str, list[str]] = field(default_factory=dict)  # declared script path -> runtime guards
+    typed_methods: dict[str, dict] = field(default_factory=dict)  # Cell:getAll / ?:getAll -> {status, count[, candidates]}
+    guarded_requires: list[str] = field(default_factory=list)    # modules loaded with pcall(require, ...)
+    api_catalog: dict | None = None                              # OpenMW API catalog used (api-audit), or None
 
     def settings_coverage(self) -> tuple[int, int]:
         r = self.settings.get("renderers", {})
@@ -350,11 +581,19 @@ class ModScan:
         for h, st in self.handlers.items():
             total += 1
             ok += st in OK_STATUSES
-        for m in self.methods.values():
+        for m in list(self.methods.values()) + list(self.typed_methods.values()):
             total += m["count"]
             if m["status"] in OK_STATUSES:
                 ok += m["count"]
         return ok, total
+
+    def unlisted(self) -> list[str]:
+        return sorted([k for k, e in self.symbols.items() if e["status"] == "unlisted"]
+                      + [k for k, e in self.typed_methods.items() if e["status"] == "unlisted"])
+
+    def unknown_to_openmw(self) -> list[str]:
+        return sorted([k for k, e in self.symbols.items() if e.get("inOpenMW") is False]
+                      + [k for k, e in self.typed_methods.items() if e.get("inOpenMW") is False])
 
     def to_dict(self) -> dict:
         ok, total = self.coverage()
@@ -371,6 +610,11 @@ class ModScan:
             "optOut": self.opt_out,
             "partialApis": self.partial_apis,
             "guards": self.guards,
+            "typedMethods": self.typed_methods,
+            "guardedRequires": self.guarded_requires,
+            "unlisted": self.unlisted(),
+            "apiCatalog": self.api_catalog,
+            "unknownToOpenMW": self.unknown_to_openmw() if self.api_catalog else [],
         }
 
 
@@ -586,7 +830,9 @@ def scope_blockers(counted: list[FileScan], scopes: dict[str, set[str]], manifes
     return out
 
 
-def scan_mod(root: Path, manifest: dict | None = None, name: str | None = None) -> ModScan:
+def scan_mod(root: Path, manifest: dict | None = None, name: str | None = None, catalog=None) -> ModScan:
+    """Scan one mod. catalog: an apicatalog.Catalog (OpenMW's own API list) or None; it only adds
+    `inOpenMW` facts and warnings, never changes the verdict."""
     manifest = manifest or load_manifest()
     root = Path(root)
     method_names = set(manifest["gameObject"]["methods"])
@@ -600,6 +846,8 @@ def scan_mod(root: Path, manifest: dict | None = None, name: str | None = None) 
     handlers: dict[str, str] = {}
     events: list[str] = []
     methods: dict[str, dict] = {}
+    typed: dict[str, dict] = {}
+    guarded: list[str] = []
     unsup_mods: list[str] = []
     meshes: list[str] = []
     blockers: list[str] = []
@@ -643,6 +891,14 @@ def scan_mod(root: Path, manifest: dict | None = None, name: str | None = None) 
         for m, c in f.methods.items():
             e = methods.setdefault(m, {"status": manifest["gameObject"]["methods"][m], "count": 0})
             e["count"] += c
+        for k, c in f.typed.items():
+            if k not in typed:
+                st, cands = typed_status(k, manifest)
+                typed[k] = {"status": st, "count": 0}
+                if cands:
+                    typed[k]["candidates"] = cands
+            typed[k]["count"] += c
+        guarded.extend(m for m in f.guarded_requires if m not in guarded)
         meshes.extend(x for x in f.meshes if x not in meshes)
     flags: dict[str, str] = {}
     for s in scripts:
@@ -659,6 +915,9 @@ def scan_mod(root: Path, manifest: dict | None = None, name: str | None = None) 
     for m, e in sorted(methods.items()):
         if e["status"] == "unsupported":
             blockers.append(f"unsupported GameObject:{m} ({e['count']}x)")
+    for k, e in sorted(typed.items()):
+        if e["status"] == "unsupported":
+            blockers.append(f"unsupported method {k} ({e['count']}x)")
     for fl, st in sorted(flags.items()):
         if st == "unsupported":
             hosted = ", ".join(sorted(k for k, v in manifest["scriptFlags"].items() if v != "unsupported"))
@@ -670,6 +929,25 @@ def scan_mod(root: Path, manifest: dict | None = None, name: str | None = None) 
     for s in scripts:
         if not (root / s.path).exists() and not any(p.name == Path(s.path).name for p in find_lua_files(root)):
             warnings.append(f"declared script {s.path} not found")
+    for m in guarded:
+        warnings.append(f"{m} is loaded with pcall(require, ...): the mod checks whether it exists")
+    cat_info = None
+    if catalog is not None:
+        cat_info = catalog.info()
+        for sym, e in symbols.items():
+            e["inOpenMW"] = catalog.has(sym)
+        for k, e in typed.items():
+            e["inOpenMW"] = catalog.has_method(k)
+    ver = (cat_info or {}).get("version") or "?"
+    for sym, e in sorted(list(symbols.items()) + list(typed.items())):
+        if e["status"] == "unlisted":
+            where = ""
+            if e.get("inOpenMW") is True:
+                where = f"; OpenMW {ver} has it"
+            warnings.append(f"unlisted API {sym} ({e['count']}x): not in omwcompat's tables{where}")
+        if e.get("inOpenMW") is False:
+            warnings.append(f"{sym} ({e['count']}x) is not in OpenMW {ver}'s Lua API "
+                            "(a typo, or an API of another OpenMW version)")
     long_meshes = [m for m in meshes if len(normalize_mesh(m)) > 31]
     if long_meshes:
         warnings.append(f"{len(long_meshes)} mesh path(s) longer than 31 chars need aliases (R4)")
@@ -717,10 +995,26 @@ def scan_mod(root: Path, manifest: dict | None = None, name: str | None = None) 
         blockers.insert(0, f"{opt['code']}: {opt['message']}")
     # An author opt-out never reports where anything is in the mod's files (no file/line).
     partial = [] if opt else partial_api_uses(counted, symbols, handlers, methods, flags, renderers, manifest)
+    if not opt:
+        for k, e in sorted(typed.items()):
+            if e["status"] == "partial":
+                partial.append({"api": k, "kind": "typedMethod", "count": e["count"],
+                                "uses": _uses(counted, "typed_lines", k)[:MAX_PARTIAL_USES],
+                                "missing": TYPED_NOTES.get(k.split(":")[-1].split(".")[-1], GENERIC_PARTIAL)})
     found, guards = ([], {}) if opt else pattern_findings(root, scripts, files, counted)
     partial.extend(pattern_partials(found))
     return ModScan(name or root.name, str(root), scripts, files, symbols, handlers, events, methods, flags,
-                   unsup_mods, meshes, blockers, warnings, settings_info, hard, opt, partial, found, guards)
+                   unsup_mods, meshes, blockers, warnings, settings_info, hard, opt, partial, found, guards,
+                   typed, guarded, cat_info)
+
+
+# notes for partial typed methods (by method name)
+TYPED_NOTES = {
+    "getAll": "Cell:getAll lists the cell's MWSE references (any script kind; OpenMW allows it in global scripts "
+              "only); Inventory:getAll is not supported, so a call on an inventory fails",
+    "createRecordDraft": "Light (or any type) with a template only; models longer than 31 characters need a "
+                         "packager mesh alias (R4)",
+}
 
 
 def pattern_findings(root: Path, scripts: list, files: list, counted: list) -> tuple[list[dict], dict[str, list[str]]]:
@@ -951,6 +1245,12 @@ def render_markdown(scans: list[ModScan], title: str = "omw2mwse scan") -> str:
                 out.append(f"  - `{x['rule']}` at {x['file']}:{x['line']} (`{x['table']}`): {x['detail']}; {how}")
             for path, g in sorted(s.guards.items()):
                 out.append(f"  - guards for `{path}`: " + ", ".join(g))
+        if s.typed_methods:
+            out.append("- Other methods: " + ", ".join(f"{m} x{e['count']} ({e['status']})"
+                                                     for m, e in sorted(s.typed_methods.items())))
+        if s.api_catalog:
+            out.append(f"- Checked against OpenMW {s.api_catalog.get('version') or '?'}'s Lua API "
+                       f"({s.api_catalog.get('layout')}); not in it: {len(s.unknown_to_openmw())}")
         if s.methods:
             out.append("- GameObject methods: " + ", ".join(f"{m} x{e['count']} ({e['status']})" for m, e in sorted(s.methods.items())))
         if s.blockers:
