@@ -1,9 +1,17 @@
-"""Decide whether a root-level plugin is optional for tidy (rule-based)."""
+"""Place and classify plugins in a converted OpenMW package (rule-based, no prompts).
+
+Placement is decided in code only: no readme or FOMOD text, no user prompt.
+A plugin in any package subfolder goes to Extras/<Mod>/. A root plugin whose
+introduced records are referenced by hosted Lua only inside branches pruned as
+dead under omwcompat API_REVISION (70, post-0.49 OpenMW) is obsolete and stays
+only under Off/<Mod>/OpenMW/. Every other root plugin is left at the Data Files
+root and enabled by default (required if live Lua references it, otherwise
+undetermined, because MWScript or records may still need it).
+"""
 from __future__ import annotations
 
 import re
 from pathlib import Path
-from xml.etree import ElementTree as ET
 
 from . import tes3
 from .luatok import LuaSyntaxError, tokenize
@@ -11,15 +19,9 @@ from .luatok import LuaSyntaxError, tokenize
 PLUGIN_KINDS = {".esp": "esp", ".esm": "esm"}
 # original extensions that convert may emit under a new name
 PLUGIN_SOURCES = {".esp": "esp", ".esm": "esm", ".omwaddon": "esp", ".omwgame": "esm"}
-
-# Words in a readme, next to the plugin filename, that mark it optional/legacy.
-README_MARK = re.compile(
-    r"\b(optional|legacy|not required|only needed|older(?:\s+openmw)?|old openmw|"
-    r"pre-?april|api\s*<\s*\d+)\b",
-    re.IGNORECASE,
-)
-README_NAMES = re.compile(r"^(readme|read me|license|changelog|notes)(\b|\.|$)", re.IGNORECASE)
-OPTIONAL_DIR = re.compile(r"(^|/)(optional|optionals|legacy)(/|$)", re.IGNORECASE)
+PLUGIN_RENAMES = {".omwaddon": ".esp", ".omwgame": ".esm"}
+PLACEMENTS = ("root", "extras", "off")
+STATUSES = ("required", "undetermined", "obsolete")
 
 
 def compat_api_revision(runtime_lua: Path | None = None) -> int:
@@ -105,13 +107,14 @@ def _eval_cond(toks, start, end, consts: dict[str, bool], aliases: dict[str, str
     return None
 
 
-def live_lua_strings(src: str, revision: int | None = None) -> tuple[set[str], list[tuple[str, str]]]:
-    """String literals in code that actually runs under omwcompat.
+def lua_branch_strings(src: str, revision: int | None = None):
+    """String literals in live vs dead Lua under omwcompat.
 
-    Returns (all live string values lowercased, and getGlobalScript argument strings
-    as (raw, lower) pairs). Branches proven dead from a constant
-    `core.API_REVISION` comparison (omwcompat reports 70) are skipped, so a
-    legacy OpenMW-0.49 path is not treated as a dependency of the conversion.
+    Returns (live_strings, live_getGlobalScript, dead_strings, dead_getGlobalScript).
+    String sets are lowercased; getGlobalScript entries are (raw, lower) pairs.
+    Branches proven dead from a constant `core.API_REVISION` comparison
+    (omwcompat reports 70) go in the dead sets, so a legacy OpenMW-0.49 path
+    can prove a plugin obsolete without making it required.
     """
     revision = compat_api_revision() if revision is None else revision
     try:
@@ -175,6 +178,8 @@ def live_lua_strings(src: str, revision: int | None = None) -> tuple[set[str], l
 
     strings: set[str] = set()
     ggs: list[tuple[str, str]] = []
+    dead_strings: set[str] = set()
+    dead_ggs: list[tuple[str, str]] = []
 
     def is_get_global(i: int) -> bool:
         # ...mwscript.getGlobalScript ( "id"
@@ -280,186 +285,193 @@ def live_lua_strings(src: str, revision: int | None = None) -> tuple[set[str], l
                     live_stack.pop()
                 i += 1
                 continue
-        if t.kind == "string" and live():
-            strings.add(t.value.lower())
-            if i >= 2 and is_get_global(i - 2):
-                ggs.append((t.value, t.value.lower()))
+        if t.kind == "string":
+            low = t.value.lower()
+            pair = (t.value, low)
+            if live():
+                strings.add(low)
+                if i >= 2 and is_get_global(i - 2):
+                    ggs.append(pair)
+            else:
+                dead_strings.add(low)
+                if i >= 2 and is_get_global(i - 2):
+                    dead_ggs.append(pair)
         i += 1
-    return strings, ggs
+    return strings, ggs, dead_strings, dead_ggs
 
 
-def _readme_files(src: Path) -> list[Path]:
-    out = []
-    for p in src.rglob("*"):
-        if not p.is_file():
-            continue
-        rel = p.relative_to(src).as_posix()
-        if rel.lower().startswith("mwse/") or "/__pycache__/" in "/" + rel.lower() + "/":
-            continue
-        name = p.name
-        if README_NAMES.match(name) or p.suffix.lower() in (".md", ".txt") and name.lower() in {
-            "readme.md", "readme.txt", "readme", "read me.txt", "documentation.md",
-        }:
-            out.append(p)
-        elif name.lower() in {"readme.txt", "readme.md", "readme"}:
-            out.append(p)
-    # also any top-level .txt/.md
-    for p in src.iterdir() if src.is_dir() else []:
-        if p.is_file() and p.suffix.lower() in (".txt", ".md"):
-            if p not in out:
-                out.append(p)
-    return out
+def live_lua_strings(src: str, revision: int | None = None) -> tuple[set[str], list[tuple[str, str]]]:
+    """Live string literals only (legacy helper)."""
+    live, ggs, _dead, _dg = lua_branch_strings(src, revision)
+    return live, ggs
 
 
-def _readme_marks_optional(src: Path, filename: str) -> str | None:
-    """Return a short reason if a readme next to the filename calls it optional/legacy."""
-    needle = filename.lower()
-    stem = Path(filename).stem.lower()
-    for p in _readme_files(src):
-        try:
-            text = p.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        lines = text.splitlines()
-        for i, line in enumerate(lines):
-            low = line.lower()
-            if needle not in low and stem not in low:
-                continue
-            window = "\n".join(lines[max(0, i - 2):i + 3])
-            if README_MARK.search(window):
-                return f"readme {p.relative_to(src).as_posix()} describes {filename} as optional or legacy"
-    return None
+def is_plugin_path(rel: str) -> bool:
+    """True if this original-package relative path is a TES3 plugin (any folder)."""
+    return Path(rel.replace("\\", "/")).suffix.lower() in PLUGIN_SOURCES
 
 
-def _fomod_optional_files(src: Path) -> set[str]:
-    """Basenames listed in a FOMOD optionalFileGroups entry and not in requiredInstallFiles."""
-    paths = list(src.glob("fomod/ModuleConfig.xml")) + list(src.glob("ModuleConfig.xml"))
-    optional: set[str] = set()
-    required: set[str] = set()
-
-    def local(tag: str) -> str:
-        return tag.rsplit("}", 1)[-1].lower()
-
-    def files_under(el) -> list[str]:
-        out = []
-        for n in el.iter():
-            if local(n.tag) in ("file", "folder"):
-                src_a = n.attrib.get("source") or n.attrib.get("Source") or ""
-                dest = n.attrib.get("destination") or n.attrib.get("Destination") or src_a
-                if dest:
-                    out.append(Path(dest).name.lower())
-                if src_a:
-                    out.append(Path(src_a).name.lower())
-        return out
-
-    for cfg in paths:
-        try:
-            root = ET.parse(cfg).getroot()
-        except (ET.ParseError, OSError):
-            continue
-        for n in root.iter():
-            tag = local(n.tag)
-            if tag == "requiredinstallfiles":
-                required.update(files_under(n))
-            elif tag == "optionalfilegroups":
-                optional.update(files_under(n))
-    return {n for n in optional if n not in required}
+def installed_plugin_rel(rel: str) -> str:
+    """Relative path with .omwaddon/.omwgame renamed so the original engine can load it."""
+    rel = rel.replace("\\", "/")
+    suf = Path(rel).suffix.lower()
+    if suf in PLUGIN_RENAMES:
+        return rel[: -len(suf)] + PLUGIN_RENAMES[suf]
+    return rel
 
 
-def package_optional_reason(src: Path, source_rel: str, filename: str) -> str | None:
-    rel = source_rel.replace("\\", "/")
-    if OPTIONAL_DIR.search(rel):
-        return f"shipped under {rel.rsplit('/', 1)[0]}/ (optional or legacy folder)"
-    fomod = _fomod_optional_files(src)
-    if filename.lower() in fomod or Path(source_rel).name.lower() in fomod:
-        return f"{filename} is in a FOMOD optional group"
-    return _readme_marks_optional(src, filename) or _readme_marks_optional(src, Path(source_rel).name)
+def extras_prefix(name: str, data_prefix: str = "") -> str:
+    """Extras/<Mod>/ under a Data Files root (tidy does not look inside Extras/)."""
+    d = (data_prefix.rstrip("/") + "/") if data_prefix else ""
+    return f"{d}Extras/{name}/"
 
 
-def _lua_needs(introduced: set[str], lua_texts: dict[str, str], revision: int | None = None) -> list[str]:
-    """How the hosted Lua refers to a plugin-defined id (empty => it does not need the plugin)."""
+def _hits(introduced: set[str], strings: set[str], ggs: list[tuple[str, str]]) -> list[str]:
+    """How Lua refers to a plugin-defined id (empty => no such reference in this set)."""
     hits: list[str] = []
     seen: set[str] = set()
-    for path, text in lua_texts.items():
-        strings, ggs = live_lua_strings(text, revision)
-        for raw, low in ggs:
-            if low in introduced and low not in seen:
-                seen.add(low)
-                hits.append(f'getGlobalScript("{raw}")')
-        for s in strings:
-            if s in introduced and s not in seen:
-                seen.add(s)
-                hits.append(f'record id "{s}"')
+    for raw, low in ggs:
+        if low in introduced and low not in seen:
+            seen.add(low)
+            hits.append(f'getGlobalScript("{raw}")')
+    for s in strings:
+        if s in introduced and s not in seen:
+            seen.add(s)
+            hits.append(f'record id "{s}"')
     return hits
 
 
-def classify_root_plugins(src: Path, originals: list[tuple[Path, str]],
-                          renamed: list[tuple[str, str]], lua_texts: dict[str, str],
-                          revision: int | None = None) -> list[dict]:
-    """Describe every plugin emit-or-leave at the Data Files root.
+def _lua_refs(introduced: set[str], lua_texts: dict[str, str], revision: int | None = None):
+    """Live and dead-branch references from hosted Lua to a plugin's introduced ids."""
+    live: list[str] = []
+    dead: list[str] = []
+    seen_live: set[str] = set()
+    seen_dead: set[str] = set()
+    for _path, text in lua_texts.items():
+        live_s, live_g, dead_s, dead_g = lua_branch_strings(text, revision)
+        for h in _hits(introduced, live_s, live_g):
+            if h not in seen_live:
+                seen_live.add(h)
+                live.append(h)
+        for h in _hits(introduced, dead_s, dead_g):
+            if h not in seen_dead and h not in seen_live:
+                seen_dead.add(h)
+                dead.append(h)
+    return live, dead
+
+
+def _status_for(live_hits: list[str], dead_hits: list[str], introduced: set[str], revision: int):
+    ids = ", ".join(sorted(introduced)) or "no introduced record ids"
+    if live_hits:
+        return "required", "hosted Lua references " + ", ".join(live_hits)
+    if dead_hits:
+        return "obsolete", (
+            f"hosted Lua references {', '.join(dead_hits)} only inside a dead "
+            f"API_REVISION branch (omwcompat API_REVISION={revision}); "
+            f"no live reference to this plugin's records ({ids})"
+        )
+    return "undetermined", (
+        f"hosted Lua does not reference a record this plugin defines ({ids}); "
+        "MWScript or records may still need it"
+    )
+
+
+def classify_plugins(src: Path, originals: list[tuple[Path, str]],
+                     lua_texts: dict[str, str], name: str,
+                     revision: int | None = None,
+                     data_prefix: str = "", off_rel: str = "") -> list[dict]:
+    """Describe every plugin in the original package and where it is installed.
 
     originals: (path, relative path in the original package)
-    renamed: (original rel, Data Files root rel) for .omwaddon/.omwgame
     lua_texts: hosted Lua path -> source text
+    name: the converted mod id (Extras/<name>/, Off/<name>/OpenMW/)
     """
-    rename_to = {o.replace("\\", "/"): n for o, n in renamed}
-    rename_from = {n.replace("\\", "/"): o for o, n in renamed}
-    # root-level original plugins (after rename, the name at the Data Files root)
-    items: list[tuple[Path, str, str]] = []  # (file, source_rel, root_name)
-    seen_root: set[str] = set()
+    revision = compat_api_revision() if revision is None else revision
+    d = (data_prefix.rstrip("/") + "/") if data_prefix else ""
+    off = off_rel or f"{d}Off/{name}/OpenMW/"
+    extras = extras_prefix(name, data_prefix)
+    original_names = {rel.replace("\\", "/").lower() for _p, rel in originals}
+
+    items: list[tuple[Path, str]] = []
+    seen: set[str] = set()
     for p, rel in originals:
         rel = rel.replace("\\", "/")
-        suf = Path(rel).suffix.lower()
-        if suf not in PLUGIN_SOURCES:
+        if not is_plugin_path(rel):
             continue
-        if "/" in rel and not rename_to.get(rel):
-            # only root-level plugins are installed at the Data Files root
-            # (is_game_asset requires no slash), unless we somehow renamed one
+        key = rel.lower()
+        if key in seen:
             continue
-        if "/" in rel:
-            continue
-        root_name = rename_to.get(rel, rel)
-        # clash case: renamed_plugin was skipped, so the plugin is Off/-only
-        # (not at the root). Those are not "emitted or left at the mod root".
-        if rel in rename_from.values() and rel not in rename_to and root_name == rel and suf in {".omwaddon", ".omwgame"}:
-            # not in rename_to means it was not installed under a new name; also
-            # not left as .omwaddon at the root. skip.
-            pass
-        key = root_name.lower()
-        if key in seen_root:
-            continue
-        seen_root.add(key)
-        items.append((p, rel, root_name))
+        seen.add(key)
+        items.append((p, rel))
 
     out: list[dict] = []
-    for path, source_rel, root_name in items:
+    for path, source_rel in items:
         kind = PLUGIN_SOURCES[Path(source_rel).suffix.lower()]
-        # if the installed name has a known kind, prefer that
-        kind = PLUGIN_KINDS.get(Path(root_name).suffix.lower(), kind)
+        installed_rel = installed_plugin_rel(source_rel)
+        root_name = Path(installed_rel).name
+        kind = PLUGIN_KINDS.get(Path(installed_rel).suffix.lower(), kind)
+        is_root = "/" not in source_rel
         plugin = tes3.parse_plugin(path)
-        entry = {"name": root_name, "source": Path(source_rel).name, "kind": kind,
-                 "optional": False, "reason": ""}
+        entry = {
+            "name": root_name,
+            "source": Path(source_rel).name,
+            "sourceRel": source_rel,
+            "kind": kind,
+            "placement": "root",
+            "status": "undetermined",
+            "path": d + root_name,
+            "reason": "",
+        }
+        # Root .omwaddon/.omwgame whose renamed name is already a file in the
+        # package is not installed (the shipped .esp/.esm wins).
+        clash = (
+            is_root
+            and Path(source_rel).suffix.lower() in PLUGIN_RENAMES
+            and installed_rel.lower() in original_names
+            and installed_rel.lower() != source_rel.lower()
+        )
+
         if plugin.error:
-            entry["reason"] = f"could not parse {Path(source_rel).name}: {plugin.error}; treated as required"
-            out.append(entry)
-            continue
-        introduced = plugin.introduced_ids()
-        needs = _lua_needs(introduced, lua_texts, revision)
-        pkg = package_optional_reason(src, source_rel, root_name)
-        if not needs:
-            entry["optional"] = True
-            ids = ", ".join(sorted(introduced)) or "no introduced record ids"
-            entry["reason"] = (
-                f"hosted Lua does not reference a record this plugin defines ({ids})"
+            status, reason = "required", (
+                f"could not parse {Path(source_rel).name}: {plugin.error}; treated as required"
             )
-            if pkg:
-                entry["reason"] += "; " + pkg
-        elif pkg:
-            entry["optional"] = True
-            entry["reason"] = pkg + f" (Lua does reference {', '.join(needs)})"
+            live_hits, dead_hits = [], []
+            introduced: set[str] = set()
         else:
-            entry["optional"] = False
-            entry["reason"] = "hosted Lua references " + ", ".join(needs)
+            introduced = plugin.introduced_ids()
+            live_hits, dead_hits = _lua_refs(introduced, lua_texts, revision)
+            status, reason = _status_for(live_hits, dead_hits, introduced, revision)
+
+        if not is_root:
+            entry["placement"] = "extras"
+            entry["status"] = status
+            entry["path"] = extras + installed_rel
+            folder = source_rel.rsplit("/", 1)[0]
+            entry["reason"] = (
+                reason.rstrip(".")
+                + f". Shipped under {folder}/; placed in Extras/ for the user to inspect "
+                "(not auto-enabled)"
+            )
+        elif clash:
+            entry["placement"] = "off"
+            entry["status"] = status
+            entry["path"] = off + source_rel
+            entry["name"] = Path(source_rel).name  # not installed under the .esp name
+            entry["reason"] = (
+                reason.rstrip(".")
+                + f"; not installed as {root_name}: the package also ships that file"
+            )
+        elif status == "obsolete":
+            entry["placement"] = "off"
+            entry["status"] = "obsolete"
+            entry["path"] = off + source_rel
+            entry["reason"] = reason
+        else:
+            entry["placement"] = "root"
+            entry["status"] = status
+            entry["path"] = d + root_name
+            entry["reason"] = reason
         out.append(entry)
-    out.sort(key=lambda e: e["name"].lower())
+    out.sort(key=lambda e: (e["placement"], e["name"].lower(), e.get("path", "").lower()))
     return out
+

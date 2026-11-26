@@ -522,15 +522,24 @@ class GameAssetsStay(unittest.TestCase):
             self.assertTrue((root / f"Off/{name}/OpenMW/shaders/x.omwfx").is_file())
 
 
-class PluginOptional(unittest.TestCase):
-    """Root-level plugins are marked optional or required by rule, not by filename."""
+class PluginPlacement(unittest.TestCase):
+    """Plugins are placed by rule: root, Extras/, or Off/. No readme or FOMOD text."""
 
     def _write_plugin(self, path: Path, records, masters=None):
         from omw2mwse.tes3 import build_plugin
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(build_plugin(records, masters=masters or ["Morrowind.esm"]))
 
-    def test_getglobalscript_makes_omwaddon_required(self):
+    def _plug(self, result, name=None):
+        plugs = result["mods"][0]["plugins"]
+        if name is None:
+            self.assertEqual(len(plugs), 1, plugs)
+            return plugs[0]
+        hits = [p for p in plugs if p["name"] == name]
+        self.assertEqual(len(hits), 1, plugs)
+        return hits[0]
+
+    def test_getglobalscript_makes_omwaddon_required_at_root(self):
         # No Fires in Bad Weather: Lua reads a global script the .omwaddon defines.
         from omw2mwse.tes3 import scpt, named
         with tempfile.TemporaryDirectory() as t:
@@ -547,24 +556,28 @@ return { engineHandlers = { onUpdate = onUpdate } }
                 named("SSCR", "wetfire_weather_monitor"),
             ])
             r = convert(root, "normal")
-            plugs = r["mods"][0]["plugins"]
-            self.assertEqual(len(plugs), 1)
-            p = plugs[0]
+            p = self._plug(r)
             self.assertEqual(p["name"], "Fires.esp")
             self.assertEqual(p["source"], "Fires.omwaddon")
             self.assertEqual(p["kind"], "esp")
-            self.assertFalse(p["optional"])
+            self.assertEqual(p["placement"], "root")
+            self.assertEqual(p["status"], "required")
+            self.assertEqual(p["path"], "Fires.esp")
             self.assertIn("getGlobalScript", p["reason"])
             self.assertIn("wetfire_weather_monitor", p["reason"])
-            man = json.loads((root / "MWSE/mods/mwsuite/openmw" / r["mods"][0]["name"] / "omw2mwse-manifest.json").read_text())
-            self.assertEqual(man["plugins"], plugs)
-            rep = (root / "MWSE/mods/mwsuite/openmw" / r["mods"][0]["name"] / "OMW2MWSE-REPORT.md").read_text()
+            self.assertTrue((root / "Fires.esp").is_file())
+            self.assertFalse((root / "Fires.omwaddon").exists())
+            name = r["mods"][0]["name"]
+            man = json.loads((root / "MWSE/mods/mwsuite/openmw" / name / "omw2mwse-manifest.json").read_text())
+            self.assertEqual(man["plugins"], r["mods"][0]["plugins"])
+            rep = (root / "MWSE/mods/mwsuite/openmw" / name / "OMW2MWSE-REPORT.md").read_text()
             self.assertIn("**required**", rep)
+            self.assertIn("placement **root**", rep)
 
-    def test_legacy_api_branch_does_not_make_hook_esp_required(self):
+    def test_legacy_api_branch_moves_hook_esp_to_off(self):
         # Wildlife Attacks: the ESP defines ll_getfight + ll_fight_token and patches
         # vanilla CREA; Lua only touches the token inside `API_REVISION < 59`, which
-        # is dead under omwcompat (API_REVISION 70). Vanilla ids like "alit" do not count.
+        # is dead under omwcompat (API_REVISION 70). That is provably obsolete.
         from omw2mwse.tes3 import scpt, named
         lua = """\
 local core = require('openmw.core')
@@ -590,16 +603,24 @@ return { engineHandlers = { onUpdate = onUpdate } }
                 named("LIGH", "ll_fight_token"),
             ], masters=["Morrowind.esm", "Bloodmoon.esm"])
             r = convert(root, "normal")
-            plugs = r["mods"][0]["plugins"]
-            self.assertEqual(len(plugs), 1)
-            p = plugs[0]
+            p = self._plug(r)
+            name = r["mods"][0]["name"]
             self.assertEqual(p["name"], "wildlife_getfight.esp")
             self.assertEqual(p["source"], "wildlife_getfight.esp")
             self.assertEqual(p["kind"], "esp")
-            self.assertTrue(p["optional"], p["reason"])
-            self.assertIn("does not reference", p["reason"])
+            self.assertEqual(p["placement"], "off")
+            self.assertEqual(p["status"], "obsolete")
+            self.assertEqual(p["path"], f"Off/{name}/OpenMW/wildlife_getfight.esp")
+            self.assertIn("dead", p["reason"])
             self.assertIn("ll_fight_token", p["reason"])
-            self.assertIn("ll_getfight", p["reason"])
+            self.assertFalse((root / "wildlife_getfight.esp").exists())
+            self.assertTrue((root / f"Off/{name}/OpenMW/wildlife_getfight.esp").is_file())
+            # second run is a no-op and keeps the plugin only under Off/
+            r2 = convert(root, "normal")
+            self.assertFalse(r2["changed"])
+            self.assertEqual(r2["mods"][0]["plugins"][0]["placement"], "off")
+            self.assertFalse((root / "wildlife_getfight.esp").exists())
+            self.assertTrue((root / f"Off/{name}/OpenMW/wildlife_getfight.esp").is_file())
 
     def test_live_record_id_makes_plugin_required(self):
         from omw2mwse.tes3 import named
@@ -613,14 +634,28 @@ end
 return { engineHandlers = { onInit = onInit } }
 """)
             self._write_plugin(src / "Lights.esp", [named("LIGH", "my_special_light")])
-            p = convert(root, "normal")["mods"][0]["plugins"][0]
-            self.assertFalse(p["optional"], p["reason"])
+            p = self._plug(convert(root, "normal"))
+            self.assertEqual(p["placement"], "root")
+            self.assertEqual(p["status"], "required")
             self.assertIn("my_special_light", p["reason"])
+            self.assertTrue((root / "Lights.esp").is_file())
 
-    def test_readme_marks_optional_even_if_lua_needs_it(self):
-        # Only root-level plugins are installed at the Data Files root, so a file
-        # under optional/ is not listed (and not emitted). A root-level plugin that
-        # a readme calls optional *is* listed as optional even if Lua needs it.
+    def test_unreferenced_root_plugin_stays_enabled(self):
+        # No Lua reference at all (live or dead) is undetermined, not obsolete:
+        # MWScript or records may still need the plugin.
+        from omw2mwse.tes3 import scpt
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t)
+            src = make_staged(root, lua="local x = 1\nreturn { engineHandlers = {} }\n")
+            self._write_plugin(src / "Maybe.esp", [scpt("unused_script")])
+            r = convert(root, "normal")
+            p = self._plug(r)
+            self.assertEqual(p["placement"], "root")
+            self.assertEqual(p["status"], "undetermined")
+            self.assertIn("does not reference", p["reason"])
+            self.assertTrue((root / "Maybe.esp").is_file())
+
+    def test_readme_is_ignored_when_lua_needs_the_plugin(self):
         from omw2mwse.tes3 import scpt
         with tempfile.TemporaryDirectory() as t:
             root = Path(t)
@@ -631,12 +666,15 @@ return { engineHandlers = { onUpdate = function()
 end } }
 """)
             self._write_plugin(src / "NeedMe.esp", [scpt("needme")])
-            (src / "Readme.txt").write_text("NeedMe.esp is optional / legacy and only for older OpenMW.\n", encoding="utf-8")
-            p = convert(root, "normal")["mods"][0]["plugins"][0]
-            self.assertTrue(p["optional"], p["reason"])
-            self.assertIn("readme", p["reason"].lower())
+            (src / "Readme.txt").write_text(
+                "NeedMe.esp is optional / legacy and only for older OpenMW.\n", encoding="utf-8")
+            p = self._plug(convert(root, "normal"))
+            self.assertEqual(p["placement"], "root")
+            self.assertEqual(p["status"], "required")
+            self.assertNotIn("readme", p["reason"].lower())
+            self.assertTrue((root / "NeedMe.esp").is_file())
 
-    def test_fomod_optional_group(self):
+    def test_fomod_text_is_ignored_for_unreferenced_root_plugin(self):
         from omw2mwse.tes3 import scpt
         with tempfile.TemporaryDirectory() as t:
             root = Path(t)
@@ -653,18 +691,73 @@ end } }
                 '</files></plugin></plugins></group></optionalFileGroups>'
                 '</installStep></installSteps></config>',
                 encoding="utf-8")
-            p = convert(root, "normal")["mods"][0]["plugins"][0]
+            p = self._plug(convert(root, "normal"))
             self.assertEqual(p["name"], "Extra.esp")
-            self.assertTrue(p["optional"], p["reason"])
-            self.assertIn("FOMOD", p["reason"])
+            self.assertEqual(p["placement"], "root")
+            self.assertEqual(p["status"], "undetermined")
+            self.assertNotIn("FOMOD", p["reason"])
+            self.assertTrue((root / "Extra.esp").is_file())
 
-    def test_optional_subfolder_plugin_is_not_at_root(self):
+    def test_subfolder_plugin_goes_to_extras(self):
         from omw2mwse.tes3 import scpt
         with tempfile.TemporaryDirectory() as t:
             root = Path(t)
             src = make_staged(root, lua="local x = 1\nreturn { engineHandlers = {} }\n")
             self._write_plugin(src / "optional" / "Extra.esp", [scpt("unused_script")])
             r = convert(root, "normal")
-            self.assertEqual(r["mods"][0]["plugins"], [])
+            name = r["mods"][0]["name"]
+            p = self._plug(r)
+            self.assertEqual(p["name"], "Extra.esp")
+            self.assertEqual(p["placement"], "extras")
+            self.assertEqual(p["status"], "undetermined")
+            self.assertEqual(p["path"], f"Extras/{name}/optional/Extra.esp")
+            self.assertIn("Extras/", p["reason"])
             self.assertFalse((root / "Extra.esp").exists())
             self.assertFalse((root / "optional/Extra.esp").exists())
+            self.assertTrue((root / p["path"]).is_file())
+            self.assertTrue((root / f"Off/{name}/OpenMW/optional/Extra.esp").is_file())
+
+    def test_subfolder_omwaddon_is_renamed_in_extras(self):
+        from omw2mwse.tes3 import scpt
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t)
+            src = make_staged(root, lua="""\
+local world = require('openmw.world')
+return { engineHandlers = { onUpdate = function()
+    world.mwscript.getGlobalScript("needme")
+end } }
+""")
+            self._write_plugin(src / "legacy" / "NeedMe.omwaddon", [scpt("needme")])
+            r = convert(root, "normal")
+            name = r["mods"][0]["name"]
+            p = self._plug(r)
+            self.assertEqual(p["name"], "NeedMe.esp")
+            self.assertEqual(p["source"], "NeedMe.omwaddon")
+            self.assertEqual(p["placement"], "extras")
+            self.assertEqual(p["status"], "required")
+            self.assertEqual(p["path"], f"Extras/{name}/legacy/NeedMe.esp")
+            self.assertTrue((root / p["path"]).is_file())
+            self.assertFalse((root / "NeedMe.esp").exists())
+            self.assertTrue((root / f"Off/{name}/OpenMW/legacy/NeedMe.omwaddon").is_file())
+
+    def test_live_and_dead_refs_make_root_plugin_required(self):
+        from omw2mwse.tes3 import named
+        lua = """\
+local core = require('openmw.core')
+local old_API = core.API_REVISION < 59
+local function onInit()
+    if old_API then
+        local a = "my_special_light"
+    end
+    local b = "my_special_light"
+end
+return { engineHandlers = { onInit = onInit } }
+"""
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t)
+            src = make_staged(root, lua=lua)
+            self._write_plugin(src / "Lights.esp", [named("LIGH", "my_special_light")])
+            p = self._plug(convert(root, "normal"))
+            self.assertEqual(p["placement"], "root")
+            self.assertEqual(p["status"], "required")
+            self.assertTrue((root / "Lights.esp").is_file())

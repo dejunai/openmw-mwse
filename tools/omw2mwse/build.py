@@ -7,13 +7,16 @@ build() turns one OpenMW mod source tree into MWSE files under a Data Files root
   MWSE/mods/mwsuite/openmw/<Mod>/omw/_original/ verbatim copies of any Lua rewritten for hard-codes
   MWSE/mods/mwsuite/openmw/<Mod>/README-mwsuite.md, OMW2MWSE-REPORT.md, omw2mwse-manifest.json
   MWSE/lib/omwcompat(.lua)              the runtime (unless with_runtime=False)
-  meshes/, textures/, ...               game-loadable assets from the original package
+  meshes/, textures/, Sound/, ...       game-loadable assets from the original package
+  <Name>.esp / <Name>.esm               root plugins that are required or undetermined
+  Extras/<Mod>/...                      plugins that shipped in a package subfolder
   meshes/omwc/<slug>/<hash>.nif         short aliases for mesh paths longer than 31 chars (R4)
   <Mod>-metadata.toml
 The original package is always placed at Off/<Mod>/OpenMW/<the author's relative paths>
 (for example Off/LeaveTheLightsOff/OpenMW/scripts/LeaveTheLightsOff/LTLO_g.lua).
-Generated MWSE files are never written under Off/. Writes are two-phase (plan, then
-commit) so a conflict aborts before any change.
+A root plugin proven obsolete (Lua references it only in a dead API_REVISION
+branch) stays only under Off/. Generated MWSE files are never written under Off/.
+Writes are two-phase (plan, then commit) so a conflict aborts before any change.
 MIT, Copyright (c) 2026 dej (dejunai).
 """
 from __future__ import annotations
@@ -29,7 +32,7 @@ from pathlib import Path
 from . import __version__
 from . import constants as K
 from . import sidecar as SC
-from .plugins import classify_root_plugins
+from .plugins import classify_plugins, installed_plugin_rel, is_plugin_path
 from .scan import ModScan, find_lua_files, find_omwscripts, normalize_mesh, read_text, render_markdown, scan_mod
 
 HERE = Path(__file__).resolve().parent
@@ -99,20 +102,13 @@ def is_game_asset(rel: str) -> bool:
     return False
 
 
-# OpenMW-only content-file extensions. The files are TES3 format, byte-identical to
-# .esp/.esm; the original engine loads only .esp/.esm, so the converter renames them.
-PLUGIN_RENAMES = {".omwaddon": ".esp", ".omwgame": ".esm"}
-
-
 def renamed_plugin(rel: str) -> str | None:
     """Data Files root name for a root-level .omwaddon/.omwgame (None if not renamed)."""
     rel = rel.replace("\\", "/")
     if "/" in rel:
         return None
-    suf = Path(rel).suffix.lower()
-    if suf not in PLUGIN_RENAMES:
-        return None
-    return rel[: -len(suf)] + PLUGIN_RENAMES[suf]
+    new = installed_plugin_rel(rel)
+    return new if new != rel else None
 
 
 def iter_original_files(src: Path):
@@ -129,7 +125,7 @@ def iter_original_files(src: Path):
             continue
         if p.name.startswith(".omw2mwse-"):
             continue
-        if parts and parts[0].lower() == "mwse":
+        if parts and parts[0].lower() in {"mwse", "extras", "docs", "screenshots", "bugreports"}:
             continue
         if p.name.endswith(".omw2mwse.toml"):
             continue
@@ -463,7 +459,8 @@ def notice_text(c: dict) -> str:
     return s
 
 
-def render_readme(name: str, c: dict, mode: str, accepted: list, renamed: list | None = None) -> str:
+def render_readme(name: str, c: dict, mode: str, accepted: list, renamed: list | None = None,
+                 plugins: list | None = None) -> str:
     author = c.get("author") or "unknown"
     lines = [f"# {c['title']} for MWSE (unofficial mwsuite conversion)", "",
              notice_text(c), "",
@@ -487,7 +484,11 @@ def render_readme(name: str, c: dict, mode: str, accepted: list, renamed: list |
              "the original mod, its author and who to ask for support)"]
     for old, new in renamed or []:
         lines.append(f"- `{new}`: the original `{old}` renamed (same TES3 format); enable it in your load order")
-    lines.append("")
+    for pl in plugins or []:
+        if pl.get("placement") == "extras":
+            lines.append(f"- `{pl['path']}`: shipped in a package subfolder; inspect Extras/ yourself (not auto-enabled)")
+        elif pl.get("placement") == "off":
+            lines.append(f"- `{pl['path']}`: proven obsolete or not installed; kept with the original package")
     return "\n".join(lines)
 
 
@@ -598,7 +599,7 @@ class BuildResult:
     mod_rel: str = ""
     off_copied: list = field(default_factory=list)  # original-package relative paths
     plugins_renamed: list = field(default_factory=list)  # (original rel, Data Files root rel)
-    plugins: list = field(default_factory=list)  # root-level plugins, each with optional flag
+    plugins: list = field(default_factory=list)  # placement, status, path, reason
 
 
 def build(src: Path, writer: Writer, name: str, *, data_prefix: str = "", slug: str | None = None,
@@ -623,24 +624,21 @@ def build(src: Path, writer: Writer, name: str, *, data_prefix: str = "", slug: 
     res = BuildResult(name=name, slug=slug, source=str(src), scan=scan, writer=writer, omw_rel=omw, off_rel=off)
     res.mod_rel = mdir
 
-    # 0. Complete original OpenMW package at Off/<plugin>/OpenMW/<original paths>
+    # 0. Complete original OpenMW package at Off/<plugin>/OpenMW/<original paths>.
+    # Non-plugin game assets (meshes, Sound, ...) are also installed at the Data
+    # Files root. Plugins are classified and placed after the hosted Lua is known.
     originals = list(iter_original_files(src))
     present = {rel.lower() for _, rel in originals}
+    plugin_data = {}
     for p, rel in originals:
         data = p.read_bytes()
         writer.put(off + rel, data)
         res.off_copied.append(rel)
+        if is_plugin_path(rel):
+            plugin_data[rel.replace("\\", "/")] = data
+            continue
         if is_game_asset(rel):
-            new = renamed_plugin(rel)
-            if new and new.lower() in present:
-                res.alerts.append({"level": "warning", "code": "plugin-rename-clash",
-                                   "message": f"{rel} not renamed: the package also ships {new}; "
-                                              f"{rel} is kept only under Off/"})
-                continue
-            if new:
-                res.plugins_renamed.append((rel, new))
-                res.notes.append(f"{rel} installed as {new} (same TES3 format; Morrowind loads only .esp/.esm)")
-            writer.put(D + (new or rel), data)
+            writer.put(D + rel, data)
 
     # 1. Lua placement
     declared = {s.path.lower(): s.path for s in scan.scripts}
@@ -758,8 +756,6 @@ def build(src: Path, writer: Writer, name: str, *, data_prefix: str = "", slug: 
     res.credits = cred
     writer.put(f"{mdir}main.lua", text_bytes(render_main(name, scan.scripts, meshmap, probe, cfg,
                                                                         title or cred.get("title"), cred)))
-    writer.put(f"{D}{name}-metadata.toml", text_bytes(render_metadata(name, src.name, cred, res.plugins_renamed)))
-    writer.put(f"{mdir}README-mwsuite.md", text_bytes(render_readme(name, cred, mode, accepted, res.plugins_renamed)))
     if with_runtime:
         writer.put(f"{D}MWSE/lib/omwcompat.lua", (RUNTIME_LIB / "omwcompat.lua").read_bytes())
         for f in sorted((RUNTIME_LIB / "omwcompat").iterdir()):
@@ -775,7 +771,42 @@ def build(src: Path, writer: Writer, name: str, *, data_prefix: str = "", slug: 
         if e["status"] not in ("full", "partial"):
             res.alerts.append({"level": "warning", "code": "settings-renderer-fallback", "renderer": r, "count": e["count"],
                                "message": f"settings renderer {r} ({e['status']}) is shown with a fallback MCM control"})
-    res.plugins = classify_root_plugins(src, originals, res.plugins_renamed, texts)
+    res.plugins = classify_plugins(src, originals, texts, name, data_prefix=data_prefix, off_rel=off)
+    # Place plugins: required/undetermined root files at the Data Files root;
+    # subfolder plugins in Extras/<Mod>/; obsolete root plugins stay only in Off/.
+    for pl in res.plugins:
+        rel = pl.get("sourceRel") or pl["source"]
+        data = plugin_data.get(rel)
+        if data is None:
+            for k, v in plugin_data.items():
+                if k.lower() == rel.replace("\\", "/").lower():
+                    data = v
+                    rel = k
+                    break
+        if data is None:
+            continue
+        clash_name = renamed_plugin(rel)
+        if clash_name and clash_name.lower() in present:
+            res.alerts.append({"level": "warning", "code": "plugin-rename-clash",
+                               "message": f"{rel} not renamed: the package also ships {clash_name}; "
+                                          f"{rel} is kept only under Off/"})
+            continue
+        if pl["placement"] == "root":
+            new = renamed_plugin(rel)
+            if new:
+                res.plugins_renamed.append((rel, new))
+                res.notes.append(f"{rel} installed as {new} (same TES3 format; Morrowind loads only .esp/.esm)")
+            writer.put(pl["path"], data)
+        elif pl["placement"] == "extras":
+            inst = installed_plugin_rel(rel)
+            if inst != rel:
+                res.notes.append(f"{rel} placed at {pl['path']} (renamed; not at the package root)")
+            else:
+                res.notes.append(f"{rel} placed at {pl['path']} (not at the package root)")
+            writer.put(pl["path"], data)
+        # placement off: already written under Off/; do not install at the root
+    writer.put(f"{D}{name}-metadata.toml", text_bytes(render_metadata(name, src.name, cred, res.plugins_renamed)))
+    writer.put(f"{mdir}README-mwsuite.md", text_bytes(render_readme(name, cred, mode, accepted, res.plugins_renamed, res.plugins)))
     res.report_md = render_report(res, mode)
     return res
 
@@ -802,11 +833,13 @@ def render_report(res: BuildResult, mode: str) -> str:
     if res.hard and res.hard.log:
         rep += ["", "## Hard-code decisions", ""] + [f"- {x}" for x in res.hard.log]
     if res.plugins:
-        rep += ["", "## Plugins at the Data Files root", ""]
+        rep += ["", "## Plugins", ""]
         for pl in res.plugins:
-            flag = "optional" if pl["optional"] else "required"
             srcn = f" (from `{pl['source']}`)" if pl.get("source") and pl["source"] != pl["name"] else ""
-            rep.append(f"- `{pl['name']}`{srcn}: **{flag}**. {pl['reason']}")
+            rep.append(
+                f"- `{pl['name']}`{srcn}: placement **{pl['placement']}**, "
+                f"status **{pl['status']}** (`{pl['path']}`). {pl['reason']}"
+            )
         rep.append("")
     if res.notes:
         rep += ["", "## Notes", ""] + [f"- {n}" for n in res.notes]
@@ -815,10 +848,21 @@ def render_report(res: BuildResult, mode: str) -> str:
                 "The complete original package is preserved here with the author's relative paths. "
                 "Contents are byte-identical to the source. Game-loadable assets (meshes, textures, "
                 "and so on) are also installed at the Data Files root so Morrowind can find them.", ""]
+        by_src = {pl.get("sourceRel"): pl for pl in res.plugins}
         for rel in res.off_copied:
-            new = dict(res.plugins_renamed).get(rel)
-            extra = (f" (installed at the Data Files root as `{new}`)" if new
-                     else " (also at the Data Files root)" if is_game_asset(rel) else "")
+            pl = by_src.get(rel)
+            if pl and pl.get("placement") == "root":
+                extra = (f" (installed at the Data Files root as `{pl['name']}`)"
+                         if pl["name"] != Path(rel).name
+                         else " (also at the Data Files root; enabled by default)")
+            elif pl and pl.get("placement") == "extras":
+                extra = f" (copy at `{pl['path']}` for the user to inspect; not auto-enabled)"
+            elif pl and pl.get("placement") == "off":
+                extra = " (not installed at the Data Files root)"
+            elif is_game_asset(rel) and not is_plugin_path(rel):
+                extra = " (also at the Data Files root)"
+            else:
+                extra = ""
             rep.append(f"- `{res.off_rel}{rel}`{extra}")
     rep += ["", "## Files", ""]
     for r, t, rewritten in res.copied:

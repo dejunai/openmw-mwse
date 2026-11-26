@@ -45,9 +45,12 @@ already at `Off/<plugin>/OpenMW/`, nothing is relocated. A second run is a no-op
 
 Game-loadable assets from the original package (`meshes/`, `textures/`, `icons/`,
 `Sound/` or `sounds/`, `music/`, `fonts/`, `splash/`, `video/`, `bookart/`, and loose
-`.esp`/`.esm`/`.bsa`) are also installed at the Data Files root so Morrowind / MWSE
-can load them. A root-level `.omwaddon` is installed as `.esp` (`.omwgame` as `.esm`);
-the original file stays under `Off/<Mod>/OpenMW/`. Hosted (possibly rewritten) Lua stays in
+`.bsa`) are also installed at the Data Files root so Morrowind / MWSE can load them.
+A root-level `.omwaddon` is installed as `.esp` (`.omwgame` as `.esm`) when it is
+required or undetermined; the original file stays under `Off/<Mod>/OpenMW/`. A root
+plugin proven obsolete is kept only under `Off/`. A plugin that shipped in a package
+subfolder is copied to `Extras/<Mod>/` (renamed if needed) and is not auto-enabled.
+Hosted (possibly rewritten) Lua stays in
 `MWSE/mods/mwsuite/openmw/<Mod>/omw/`. Generated files (the loader, aliases, runtime, metadata, reports)
 are never written under `Off/`.
 
@@ -59,10 +62,11 @@ are never written under `Off/`.
 | `MWSE/mods/mwsuite/openmw/<Mod>/omw/_original/...` | verbatim originals of files rewritten for hard-coded values |
 | `MWSE/mods/mwsuite/openmw/<Mod>/README-mwsuite.md` | notice: unofficial mwsuite conversion, support goes to dej (dejunai) via the Nexus forums, credits |
 | `MWSE/mods/mwsuite/openmw/<Mod>/OMW2MWSE-REPORT.md` | human-readable report |
-| `MWSE/mods/mwsuite/openmw/<Mod>/omw2mwse-manifest.json` | files omw2mwse owns (SHA-256) and `plugins` (optional flag); tidy `--undo` uses this |
+| `MWSE/mods/mwsuite/openmw/<Mod>/omw2mwse-manifest.json` | files omw2mwse owns (SHA-256) and `plugins` (placement, status, path, reason); tidy `--undo` uses this |
 | `MWSE/lib/omwcompat.lua`, `MWSE/lib/omwcompat/` | runtime (skip with `--no-runtime`) |
 | `meshes/`, `textures/`, `Sound/`, ... | original game assets, also kept under `Off/<Mod>/OpenMW/` |
-| `<Name>.esp` / `<Name>.esm` | root-level plugins, including an `.omwaddon` installed under an `.esp` name |
+| `<Name>.esp` / `<Name>.esm` | root plugins that are required or undetermined (enabled by default), including an `.omwaddon` installed under an `.esp` name |
+| `Extras/<Mod>/...` | plugins that shipped in a package subfolder (not auto-enabled; tidy does not look inside `Extras/`) |
 | `meshes/omwc/<slug>/<hash>.nif` | short aliases for mesh paths longer than 31 chars, copied from `meshes/` in the folder |
 | `<Mod>-metadata.toml` | MWSE metadata with the notice in its description |
 
@@ -114,7 +118,7 @@ omw2mwse outputs, such as `MWSE/mods/LTLOHandportMigration/`, are never deleted.
 
 ```json
 {
- "tool": "omw2mwse", "version": "0.2.2", "command": "convert", "mode": "normal",
+ "tool": "omw2mwse", "version": "0.2.3", "command": "convert", "mode": "normal",
  "dir": "...", "dryRun": false, "changed": true, "exitCode": 0, "alerts": [],
  "mods": [{
    "name": "LeaveTheLightsOff", "source": "Off/LeaveTheLightsOff/OpenMW",
@@ -128,7 +132,8 @@ omw2mwse outputs, such as `MWSE/mods/LTLOHandportMigration/`, are never deleted.
    "notice": "Unofficial mwsuite conversion of ... (original author: ...). Unofficial conversion by mwsuite. Do not contact the original author about it. Support: dej (dejunai) via the Nexus Mods forums.",
    "plugins": [
      {"name": "No Fires in Bad Weather.esp", "source": "No Fires in Bad Weather.omwaddon",
-      "kind": "esp", "optional": false,
+      "sourceRel": "No Fires in Bad Weather.omwaddon", "kind": "esp",
+      "placement": "root", "status": "required", "path": "No Fires in Bad Weather.esp",
       "reason": "hosted Lua references getGlobalScript("wetfire_weather_monitor")"}
    ],
    "alerts": [
@@ -153,66 +158,81 @@ location. A `--dry-run` reports `willRelocateTo` instead and writes nothing.
 other implementation of the same mod (such as Dej's LTLO hand port) is a separate matter; omw2mwse
 cannot tell, so tidy should say so when it replaces a non-omw2mwse `main.lua` (the `conflict` case).
 
-## Plugins at the Data Files root
+## Plugins
 
-Every plugin the converter *emits or leaves* at the staged-mod root (a loose `.esp`/`.esm`,
-or a root-level `.omwaddon`/`.omwgame` installed as `.esp`/`.esm`) is listed in
-`mods[].plugins` and in `omw2mwse-manifest.json` under `plugins`. Tidy should enable or
-skip a plugin from the `optional` flag, not from the filename. The list is empty when
-the package has no root-level plugin (for example a Lua-only mod, or a plugin that
-lives only under `optional/` and was therefore not installed at the Data Files root).
+Every plugin in the original package (a loose `.esp`/`.esm`, or an `.omwaddon`/`.omwgame`
+installed as `.esp`/`.esm`) is listed in `mods[].plugins` and in `omw2mwse-manifest.json`
+under `plugins`. Tidy should act on `placement` and `status`, not on the filename, and
+must not parse readmes or FOMOD text for this decision (omw2mwse does not either).
 
 Each entry is:
 
 ```json
 {"name": "wildlife_getfight.esp", "source": "wildlife_getfight.esp",
- "kind": "esp", "optional": true,
- "reason": "hosted Lua does not reference a record this plugin defines (ll_fight_token, ll_getfight)"}
+ "sourceRel": "wildlife_getfight.esp", "kind": "esp",
+ "placement": "off", "status": "obsolete",
+ "path": "Off/wildlife_attacks_npc/OpenMW/wildlife_getfight.esp",
+ "reason": "hosted Lua references record id \"ll_fight_token\" only inside a dead API_REVISION branch (omwcompat API_REVISION=70); no live reference to this plugin's records (ll_fight_token, ll_getfight)"}
 ```
 
-- `name`: the file at the Data Files root (after any `.omwaddon` -> `.esp` rename).
+- `name`: the installed filename after any `.omwaddon` -> `.esp` rename (even when the file is not at the Data Files root).
 - `source`: the filename in the original package (`Fires.omwaddon` when `name` is `Fires.esp`).
+- `sourceRel`: the original-package relative path (`optional/Extra.esp`, or a root filename).
 - `kind`: `esp` or `esm`.
-- `optional`: boolean. `true` means tidy should not auto-enable the plugin.
+- `placement`: `root`, `extras`, or `off`. This is where the installed copy lives (see `path`).
+- `status`: `required`, `undetermined`, or `obsolete`.
+- `path`: the destination relative to the staged Data Files root.
 - `reason`: a short, rule-based explanation (also copied into `OMW2MWSE-REPORT.md`).
 
-### When a plugin is optional
+The boolean `optional` field from 0.2.2 is gone. Tidy should **auto-enable only** plugins
+with `placement` `root` (status `required` or `undetermined`). Plugins with placement
+`extras` or `off` are not in the load order.
 
-A plugin is **optional** if either of the following holds; otherwise it is **required**.
+### Placement rules (code only)
 
-1. **The hosted Lua does not need it.** omw2mwse parses the TES3 file and collects the
-   record ids the plugin *defines* (introduces), not merely overrides on a master:
-   always `SCPT`, `SSCR` and `GLOB`; and any other named record, except that when the
-   plugin lists masters, an object record (`CREA`, `NPC_`, `LIGH`, ...) whose only hook
-   is a `SCRI` pointing at a script defined in the same plugin is treated as a master
-   override (the Wildlife `wildlife_getfight.esp` pattern: it attaches `ll_getfight` to
-   vanilla creatures). Those override ids are ignored, so a Lua table of vanilla
-   creature ids does not make the hook ESP required.
+These rules are decided entirely in omw2mwse. There is no prompt, no AI, and no
+readme or FOMOD heuristic.
 
-   It then looks at the hosted Lua for references to those defined ids:
-   `getGlobalScript("id")` and other string literals in code that actually runs under
-   omwcompat. Branches proven dead from a constant `core.API_REVISION` comparison are
-   skipped. omwcompat reports `API_REVISION = 70`, so an
-   `if core.API_REVISION < 59 then ...` (or `local old_API = core.API_REVISION < 59`
-   / `if old_API then`) path is not a dependency of the conversion. That is why
-   `wildlife_getfight.esp` is optional: `ll_fight_token` is only read in the old-API
-   branch, and `ll_getfight` is never referenced. `No Fires in Bad Weather.esp` is
-   required: the Lua calls `getGlobalScript("wetfire_weather_monitor")`, and that
-   script is defined by the plugin.
+1. **A plugin in a package subfolder, not at the root, goes to `Extras/<Mod>/`**,
+   keeping the original relative path (with `.omwaddon`/`.omwgame` renamed). Example:
+   `optional/Extra.esp` becomes `Extras/<Mod>/optional/Extra.esp`. This replaces the
+   earlier `optional/` / `legacy/` folder and FOMOD-group logic for placement. The
+   original file also stays under `Off/<Mod>/OpenMW/`. Tidy does not look inside
+   `Extras/`; the end user inspects it themselves. `status` is still filled from the
+   Lua analysis so a required plugin in Extras is obvious, but it is not auto-enabled.
 
-   If a TES3 file cannot be parsed, the plugin is **required** (`reason` says so).
+2. **A root plugin that is provably obsolete goes to `Off/<Mod>/OpenMW/...`** with
+   the rest of the original package and is **not** installed at the Data Files root.
+   Provably obsolete means the hosted Lua references the plugin's introduced records
+   *only* inside branches pruned as dead under `API_REVISION = 70` (omwcompat; assume
+   post-0.49 OpenMW). That is why `wildlife_getfight.esp` lands in `Off/`:
+   `ll_fight_token` is only read in the `core.API_REVISION < 59` branch, and
+   `ll_getfight` is never referenced. A second `convert` run on a folder that still
+   has the plugin at the root moves it into `Off/` when the file still matches the
+   original (or, on a later run, when the previous manifest owns the root copy).
 
-2. **The package marks it optional.** Any of: the original path is under `optional/`,
-   `optionals/` or `legacy/`; a FOMOD `ModuleConfig.xml` lists the file in
-   `optionalFileGroups` and not in `requiredInstallFiles`; or a readme / top-level
-   `.txt`/`.md` names the plugin and, in the nearby lines, calls it optional, legacy,
-   only needed for an older OpenMW, or not required. This rule applies even if Lua
-   also references the plugin (tidy should still not auto-enable a file the author
-   shipped as an option).
+3. **Every other root plugin is left at the Data Files root and enabled by default.**
+   That includes:
+   - `required`: live hosted Lua references an introduced record (for example
+     `getGlobalScript("wetfire_weather_monitor")` makes `No Fires in Bad Weather.esp`
+     required).
+   - `undetermined`: hosted Lua does not reference the plugin at all (live or dead).
+     The plugin stays at the root because MWScript or records may still need it.
 
-A plugin that lives only under `optional/` is not installed at the Data Files root
-(game assets must sit at the package root to be installed there), so it does not
-appear in `plugins` at all.
+omw2mwse parses the TES3 file and collects the record ids the plugin *defines*
+(introduces), not merely overrides on a master: always `SCPT`, `SSCR` and `GLOB`;
+and any other named record, except that when the plugin lists masters, an object
+record (`CREA`, `NPC_`, `LIGH`, ...) whose only hook is a `SCRI` pointing at a
+script defined in the same plugin is treated as a master override (the Wildlife
+`wildlife_getfight.esp` pattern: it attaches `ll_getfight` to vanilla creatures).
+Those override ids are ignored, so a Lua table of vanilla creature ids does not
+make the hook ESP required.
+
+If a TES3 file cannot be parsed, a root plugin is **required** and left at the root
+(`reason` says so). Unparseable Lua is treated as live (safe: may mark required,
+never obsolete). A root `.omwaddon` that cannot be installed because the package
+also ships the same `.esp` name stays only under `Off/`, with a clash warning;
+`status` still reflects the Lua analysis.
 
 ## Credits and the support notice
 

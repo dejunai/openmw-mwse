@@ -99,11 +99,14 @@ def _prune_empty_dirs(start: Path, stop: Path) -> None:
             break
 
 
-def relocate_original(src: Path, staged: Path, name: str) -> list[str]:
+def relocate_original(src: Path, staged: Path, name: str, keep_root=None) -> list[str]:
     """After Off/<name>/OpenMW/ has been written, remove the previous package location.
 
     Game assets already at the staged Data Files root (meshes/, textures/, ...) stay
-    there so Morrowind can load them. An external --source is never deleted.
+    there so Morrowind can load them. A root plugin stays only when its installed
+    name is in keep_root (required or undetermined). Obsolete plugins and the
+    pre-rename .omwaddon/.omwgame are removed from the root once Off/ holds a
+    matching copy. An external --source is never deleted.
     """
     dest = canonical_source(staged, name)
     try:
@@ -116,18 +119,30 @@ def relocate_original(src: Path, staged: Path, name: str) -> list[str]:
         return []
     removed: list[str] = []
     src_is_root = src_r == staged_r
+    keep = {k.replace("\\", "/").lower() for k in (keep_root or [])}
     for p, rel in iter_original_files(src):
-        new = dest / rel
-        if not p.is_file() or not new.is_file():
+        posix = rel.replace("\\", "/")
+        newp = dest / rel
+        if not p.is_file() or not newp.is_file():
             continue
         try:
-            if p.resolve() == new.resolve():
+            if p.resolve() == newp.resolve():
                 continue
         except OSError:
             continue
-        if src_is_root and is_game_asset(rel) and not renamed_plugin(rel):
-            continue
-        if sha256b(p.read_bytes()) != sha256b(new.read_bytes()):
+        if src_is_root and is_game_asset(posix):
+            suf = Path(posix).suffix.lower()
+            if "/" not in posix and suf in {".esp", ".esm", ".omwaddon", ".omwgame"}:
+                # Leave a required/undetermined installed plugin at the root.
+                # Always remove the original .omwaddon/.omwgame (the renamed
+                # .esp/.esm is a different path, written by build()).
+                inst = renamed_plugin(posix)
+                if inst is None and posix.lower() in keep:
+                    continue
+            else:
+                # meshes, Sound, .bsa, ...
+                continue
+        if sha256b(p.read_bytes()) != sha256b(newp.read_bytes()):
             continue
         p.unlink()
         removed.append(rel)
@@ -259,7 +274,8 @@ def convert(staged: Path, mode: str = "normal", *, name: str | None = None, sour
                 entry["alerts"].append({"level": "warning", "code": "legacy-loader-present",
                                         "message": f"MWSE/mods/{modname}/main.lua is not an omw2mwse file and would load "
                                                    "alongside the converted mod; remove it if it is an older build or hand port"})
-            moved = relocate_original(src, staged, modname)
+            keep_root = [pl["name"] for pl in res.plugins if pl.get("placement") == "root"]
+            moved = relocate_original(src, staged, modname, keep_root=keep_root)
             if moved:
                 previous_src = entry["source"]
                 entry["source"] = str(canonical_source(staged, modname).relative_to(staged))
