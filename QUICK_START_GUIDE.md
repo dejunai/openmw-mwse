@@ -27,7 +27,7 @@ for the mod you are about to convert is also a good idea. There is no
 - To run the converter yourself: **Python 3.9+**, from a checkout of this repo,
   via `bin/omw2mwse` (or `py -3 bin/omw2mwse` on Windows).
 
-Current versions are omw2mwse 0.3.1 and omwcompat 0.4.3.
+Current versions are omw2mwse 0.3.2 and omwcompat 0.4.4.
 
 ## 2. If you use tidy (morrowind-conflict-tools)
 
@@ -75,11 +75,32 @@ successful convert, deploy with Vortex the way you usually do.
 `bin/omw2mwse scan path/to/mod` reports a verdict without converting anything,
 and is a reasonable first look.
 
-## 4. Normal MWSE.log lines (not a crash)
+## 4. Logs (not a crash)
 
-These can show up once and then go quiet. That is expected:
+This library does not spam MWSE.log. After load, MWSE.log should only show
+initialization lines:
 
-- `[omwcompat 0.4.3] SomeMod was built for omwcompat 0.4.0 (loaded 0.4.3)` -
+- `[omwcompat 0.4.4] loaded`
+- `[omwcompat 0.4.4] library log: Data Files/MWSE/logs/omwcompat.log`
+- `[omwcompat 0.4.4] registered <Mod> (N script(s)).` once per converted mod
+  (a short support notice may follow on the same line)
+
+If the library log cannot be opened, one MWSE.log line says
+`could not open Data Files/MWSE/logs/omwcompat.log (...); further messages go
+to MWSE.log` and further messages stay on MWSE.log. A missing-runtime error
+from `main.lua` (`omwcompat runtime is missing or failed to load`) also stays
+on MWSE.log, because the library never loaded.
+
+Everything else -- warnings, errors with tracebacks, stub and sound-gate
+notices, debug, converted mods' `print()`, and a BUILT_FOR mismatch from an
+omw2mwse 0.3.2 conversion (via `omwcompat.note`) -- goes to
+`Data Files/MWSE/logs/omwcompat.log`. The previous session is kept as
+`omwcompat.log.prev`. Lines are timestamped and flushed. A conversion older
+than 0.3.2 still writes its BUILT_FOR line to MWSE.log until you re-convert.
+
+These library-log lines can show up once and then go quiet. That is expected:
+
+- `[omwcompat 0.4.4] SomeMod was built for omwcompat 0.4.0 (loaded 0.4.4)` -
   the deployed runtime is a different version than the one bundled at convert
   time. Newer runtimes still run older conversions.
 - `... does nothing: animations are not ported by omwcompat ...` - animations
@@ -91,13 +112,13 @@ These can show up once and then go quiet. That is expected:
 
 These are real problems:
 
-- `omwcompat runtime is missing or failed to load`
-- `ERROR in ...` with a traceback
+- `omwcompat runtime is missing or failed to load` (on MWSE.log)
+- `ERROR in ...` with a traceback (in the library log)
 - a line saying something `is not supported` that is not one of the one-shot
   warnings above
 
 If you see a real error, do not "just try another convert into Data Files".
-Read the [README](README.md#reading-mwselog).
+Read the [README](README.md#reading-the-logs).
 
 ## 5. How to undo
 
@@ -113,7 +134,7 @@ Read the [README](README.md#reading-mwselog).
 ## 6. If it breaks
 
 Read the [README](README.md). Really. The troubleshooting section, the list of
-what is only stubbed, and the notes on MWSE.log are there for this moment.
+what is only stubbed, and the notes on the logs are there for this moment.
 
 Report conversion problems to **dej (dejunai)** on the Nexus Mods forums. Do
 not send them to the original mod author.

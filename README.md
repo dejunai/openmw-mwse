@@ -10,8 +10,8 @@ Morrowind engine (Morrowind.exe + MWSE). The original Lua is not rewritten to
 MWSE: a runtime library named **omwcompat** provides the `openmw.*` API so those
 scripts can run unmodified inside MWSE.
 
-It is a personal project by **dej (dejunai)**. Current versions: **omw2mwse 0.3.1**
-(the converter) and **omwcompat 0.4.3** (the runtime).
+It is a personal project by **dej (dejunai)**. Current versions: **omw2mwse 0.3.2**
+(the converter) and **omwcompat 0.4.4** (the runtime).
 
 If you want the short path and are willing to accept the risk, see
 [QUICK_START_GUIDE.md](QUICK_START_GUIDE.md). Come back here when something
@@ -261,14 +261,41 @@ mod untouched (verdict `blocked`, `excluded_by_author` true). No user-facing
 output says which file or line held the marker. Contact **dej (dejunai)** via
 the Nexus Mods forums for the exact wording.
 
-## Reading MWSE.log
+## Reading the logs
 
-A few lines are normal and are not a crash:
+MWSE.log is kept nearly silent after load, so this library and the converted
+mods do not spam it the way other authors' mods often do. Post-init output
+goes to `Data Files/MWSE/logs/omwcompat.log`. That `logs/` folder sits next
+to `lib/`, `mods/` and `config/` under `Data Files/MWSE/`. Each line is
+timestamped (`YYYY-MM-DD HH:MM:SS`) and flushed. At session start the previous
+file is kept as `omwcompat.log.prev` (one copy). If the file cannot be opened,
+one MWSE.log line says so and further messages fall back to MWSE.log.
 
-- `[omwcompat 0.4.3] SomeMod was built for omwcompat 0.4.0 (loaded 0.4.3)` -
+**MWSE.log only gets these initialization lines:**
+
+- `[omwcompat 0.4.4] loaded`
+- `[omwcompat 0.4.4] library log: Data Files/MWSE/logs/omwcompat.log`
+- `[omwcompat 0.4.4] registered <Mod> (N script(s)).` once per registered mod
+  (a short support notice may follow on the same line)
+- `[omwcompat 0.4.4] could not open Data Files/MWSE/logs/omwcompat.log (...);
+  further messages go to MWSE.log` if the library log could not be opened
+- `[<Mod>] omwcompat runtime is missing or failed to load: ...` from the
+  generated `main.lua`, because the library never loaded
+
+**Everything else goes to the library log:** warnings, errors with a traceback
+(on the first error of a site), stub and sound-gate notices, debug,
+converted mods' `print()`, and a BUILT_FOR mismatch from a conversion built
+by omw2mwse 0.3.2 (that line is sent through `omwcompat.note`). A few of
+those lines are normal and are not a crash:
+
+- `[omwcompat 0.4.4] SomeMod was built for omwcompat 0.4.0 (loaded 0.4.4)` -
   the shared runtime in Data Files is newer (or older) than the one the
   converter bundled when that mod was built. Newer runtimes are meant to keep
-  running older conversions. Nothing is logged when the versions match.
+  running older conversions. Nothing is logged when the versions match. A mod
+  converted with omw2mwse older than 0.3.2 still writes this line to MWSE.log;
+  re-convert it to move the line into the library log. Already-converted mods
+  do not need a re-convert for `print()` or runtime warnings: those go through
+  the 0.4.4 shim.
 - `<mod>: <call> does nothing: animations are not ported by omwcompat ...` -
   one warning per mod the first time it touches `openmw.animation` or
   `I.AnimationController`. Later calls are counted, not logged. Animations do
@@ -280,17 +307,19 @@ A few lines are normal and are not a crash:
   the sound gate blocks a removed or off-by-default light. Later blocks are
   counted, not logged.
 
-Treat these as real problems:
+Treat these as real problems (in the library log, or on MWSE.log if the file
+could not be opened):
 
-- `omwcompat runtime is missing or failed to load` - the shared library did not
-  reach Data Files. Check the Vortex deploy and that some converted mod actually
-  won the `MWSE/lib/omwcompat*` conflict.
+- `omwcompat runtime is missing or failed to load` (always on MWSE.log) - the
+  shared library did not reach Data Files. Check the Vortex deploy and that
+  some converted mod actually won the `MWSE/lib/omwcompat*` conflict.
 - `ERROR in ...` with a traceback, or `is not supported` that is not one of the
   one-line warnings above - the script hit something the runtime still raises
   on. Note the mod, the script, and the line, and see
   [Troubleshooting](#troubleshooting).
-- A handler that fails every frame is rate-limited in the log (a traceback on
-  the first error of a site, then shorter messages, then counts only).
+- A handler that fails every frame is rate-limited in the library log (a
+  traceback on the first error of a site, then shorter messages, then counts
+  only).
 
 ## Known limits
 
@@ -320,15 +349,18 @@ Treat these as real problems:
   blockers. A blocked tidy-interface run does not write a conversion.
 - **Vortex says `MWSE/lib/omwcompat*` conflicts.** Keep the newest omwcompat.
   If Vortex later offers to restore an older copy, keep the current files.
-- **A "built for" line appears in MWSE.log.** Harmless if the loaded runtime is
-  newer. If you want the line gone, re-convert the mod against the current
-  runtime.
+- **A "built for" line appears.** Harmless if the loaded runtime is newer.
+  After an omw2mwse 0.3.2 convert it is in `Data Files/MWSE/logs/omwcompat.log`.
+  An older conversion still writes it to MWSE.log; re-convert the mod to move
+  that line into the library log. If you want the line gone entirely, the
+  loaded runtime must match the one the mod was built for.
 - **Lights keep making sound after the mod turned them off.** You may be on a
   runtime older than 0.4.1, or the light is not one omwcompat generated or
   removed. The sound gate only covers omwcompat's own off copies and removed
   objects.
 - **The mod is on but seems to do nothing.** Check **MW Conversions** for the
-  "Mod enabled" switch, and MWSE.log for a missing runtime or a real error.
+  "Mod enabled" switch, MWSE.log for a missing runtime or a failed library-log
+  open, and `Data Files/MWSE/logs/omwcompat.log` for warnings and errors.
 - **You want the original package back.** It is under `Off/<plugin>/OpenMW/` in
   the staged folder, untouched. Turning "Mod enabled" off only stops the
   conversion from running; it does not restore the OpenMW layout. A finished
