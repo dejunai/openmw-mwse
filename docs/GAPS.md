@@ -128,7 +128,7 @@ because many mods have their own setting with that name.
 | `ui.showMessage` | partial | `tes3.messageBox`; options are ignored. |
 | `ambient.playSound/playSoundFile/stopSound/isSoundPlaying/say/streamMusic` | partial | `tes3.playSound` without a reference (volume, pitch, loop passed through), `tes3.say` without subtitles, `tes3.streamMusic`. |
 | `input.isKeyPressed`, `KEY`, `isShift/Ctrl/AltPressed` | full | `inputController:isKeyDown`; actions, triggers, gamepad and mouse are unsupported. |
-| `self.controls.sneak/run/jump` | partial | Read the actor's current state (`isSneaking`, `isRunning`, `isJumping`); other controls warn and read nil; writes raise. |
+| `self.controls.sneak/run/jump` | partial | Read the actor's current state (`isSneaking`, `isRunning`, `isJumping`); other controls warn and read nil; writes warn once and are ignored (0.4.3; they used to raise). |
 
 OpenMW 0.51 no longer has `async.newRealTimer`, `newUnsavableRealTimer`, `self.ownerRecordId`,
 `types.Actor/Item.record(s)` or `types.<Actor>.equipment`. omwcompat still provides them for older

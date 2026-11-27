@@ -396,9 +396,12 @@ local function skillStat(key)
     end
 end
 
----------------------------------------------------------------- controls (0.4.0, read-only)
+---------------------------------------------------------------- controls (0.4.0 read, 0.4.3 writes)
 -- self.controls: sneak/run/jump read the actor's current state (mobile.isSneaking, isRunning,
 -- isJumping); OpenMW's controls are inputs a script can set, which omwcompat does not emulate.
+-- Writes used to raise (0.4.0), which aborted Thieves Pickpocket's onInactive (stopTracking
+-- always does self.controls.yawChange = 0, MWSE.log 2026-11-27 04:00:03). Since 0.4.3 a write
+-- warns once and is ignored, so the rest of the handler still runs.
 local CONTROLS = { sneak = "isSneaking", run = "isRunning", jump = "isJumping" }
 function M.controlsOf(selfObj)
     return setmetatable({}, {
@@ -413,7 +416,9 @@ function M.controlsOf(selfObj)
             return ok and v == true or false
         end,
         __newindex = function(_, k)
-            error("omwcompat: self.controls." .. tostring(k) .. " cannot be set (controls are read-only in omwcompat)", 2)
+            rt.warnOnce("controls.set." .. tostring(k),
+                "self.controls.%s cannot be set: movement controls are not emulated by omwcompat %s (the write is ignored; further writes are counted, not logged)",
+                tostring(k), rt.VERSION)
         end,
     })
 end

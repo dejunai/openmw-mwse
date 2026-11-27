@@ -58,7 +58,7 @@ return {}
 ]])
 
 local rt = require("omwcompat")
-check(rt.VERSION == "0.4.2", "runtime 0.4.2 (" .. rt.VERSION .. ")")
+check(rt.VERSION == "0.4.3", "runtime 0.4.3 (" .. rt.VERSION .. ")")
 rt.register({ mod = "ACGuarded", root = FIX, scripts = {
     { flags = { "GLOBAL" }, path = "scripts/ActiveCollect/global.lua", guards = { "activeDedupe", "safeIteration" } } } })
 rt.register({ mod = "ACPlain", root = FIX, scripts = {

@@ -182,6 +182,19 @@ bin/omw2mwse scan path/to/mod --no-openmw             # scan without the catalog
   finished by the mod's own timer, disposition, and the original `tpickpocket_local.lua` running
   300 frames without an error when the untracked corpus is present.
 
+## omwcompat 0.4.3: control writes degrade quietly
+
+- **Why.** After 0.4.2, `require('openmw.animation')` no longer raised, but Thieves Pickpocket's
+  `stopTracking` still aborted `onInactive` by writing `self.controls.yawChange = 0`
+  (MWSE.log 2026-11-27 04:00:03). `finishApology` and `setAI(true)` never ran.
+- **Where.** `actors.lua` `controlsOf` `__newindex`: warn once, ignore the write. See
+  [RUNTIME.md](RUNTIME.md#movement-controls-043).
+- **Converter.** Unchanged (omw2mwse 0.3.1).
+- **Tests.** `tests/lua/test_v043.lua`: writes no longer raise, one warning per field across
+  50 more writes, `onInactive` finishes, and the original `tpickpocket_local.lua` deactivates
+  without an error when the untracked corpus is present.
+
+
 ## Further reading
 
 - [RUNTIME.md](RUNTIME.md): how the emulation works, local scripts, object-lifecycle rules.

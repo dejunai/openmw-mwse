@@ -1,7 +1,7 @@
 # omwcompat runtime
 
 omwcompat is an MWSE Lua library at `Data Files/MWSE/lib/omwcompat.lua` plus `omwcompat/`.
-It runs OpenMW GLOBAL, object-attached, CUSTOM and PLAYER scripts unmodified. Version 0.4.2.
+It runs OpenMW GLOBAL, object-attached, CUSTOM and PLAYER scripts unmodified. Version 0.4.3.
 
 ## Layout
 
@@ -300,6 +300,14 @@ as unsupported, so verdicts do not change: the mod runs, its animations do not p
 `types.NPC.getDisposition` / `getBaseDisposition` (0.4.2) read the NPC instance's effective /
 base disposition (Morrowind has one per NPC, the player argument is ignored);
 `setBaseDisposition` / `modifyBaseDisposition` write the base value, clamped to 0..100.
+
+## Movement controls (0.4.3)
+
+`self.controls.sneak`, `run` and `jump` still read the actor's current state. Other fields
+(`yawChange`, `movement`, ...) still read nil. Writes no longer raise: the first write of
+each field logs one line (`self.controls.<name> cannot be set: movement controls are not
+emulated...`); later writes are ignored silently. Thieves Pickpocket's `onInactive` always
+writes `yawChange = 0` in `stopTracking`, and must still run `finishApology` afterwards.
 
 ## Activation dispatch
 

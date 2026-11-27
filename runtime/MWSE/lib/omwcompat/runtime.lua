@@ -13,7 +13,7 @@ local timing = require("omwcompat.timing")
 local guards = require("omwcompat.guards")
 local player = require("omwcompat.player")
 
-local RT = { VERSION = "0.4.2", API_REVISION = 70, PROBE_API_REVISION = 100 }
+local RT = { VERSION = "0.4.3", API_REVISION = 70, PROBE_API_REVISION = 100 }
 local LOCAL_FLAG_NAMES
 objects.init(RT)
 settings.init(RT)
