@@ -274,6 +274,9 @@ class Writer:
 
     def put(self, rel: str, data: bytes) -> None:
         rel = rel.replace("\\", "/")
+        parts = rel.split("/")
+        if rel.startswith("/") or ".." in parts or (parts and len(parts[0]) == 2 and parts[0][1] == ":"):
+            raise BuildError(f"refusing to plan a write outside the output folder: {rel}")
         if self.max_path is not None and abs_path_len(self._abs_root, rel) > self.max_path:
             if rel not in self.too_long:
                 self.too_long.append(rel)

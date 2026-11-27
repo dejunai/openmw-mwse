@@ -2,6 +2,6 @@
 
 MIT, Copyright (c) 2026 dej (dejunai). Built with Grok Bot.
 """
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 # Oldest supported interpreter (also pyproject.toml requires-python and convert --json "requiresPython").
 REQUIRES_PYTHON = ">=3.9"

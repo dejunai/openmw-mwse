@@ -10,6 +10,7 @@ from .build import (BuildError, Writer, build, default_slug, lua_str, mesh_alias
                     render_metadata, sha256b, text_bytes)
 from .optout import find_opt_out
 from .scan import load_manifest
+from .targets import refuse_protected
 
 MARKER = ".omw2mwse-output"
 PackageError = BuildError
@@ -19,10 +20,16 @@ def _tree_hashes(root: Path) -> dict:
     return {p: sha256b(p.read_bytes()) for p in sorted(root.rglob("*")) if p.is_file()}
 
 
-def package(src: Path, out: Path, name: str | None = None, slug: str | None = None, with_runtime: bool = True,
+def package(src: Path, out: Path, name: str | None = None, slug: str | None = None,
             meshes_from: Path | None = None, force: bool = False, manifest: dict | None = None,
             mode: str = "normal", sidecar: dict | None = None, confirm=None, title: str | None = None,
             credits: dict | None = None) -> dict:
+    # package builds a fresh OUT/Data Files tree (a staging copy for a mod archive): never in, or
+    # from, a real Data Files folder or game install. The omwcompat runtime is always included.
+    refuse_protected(src, "source")
+    refuse_protected(out, "output folder")
+    if meshes_from:
+        refuse_protected(meshes_from, "--meshes-from")
     src, out = Path(src).resolve(), Path(out).resolve()
     if not src.is_dir():
         raise PackageError(f"source {src} is not a directory")
@@ -40,7 +47,7 @@ def package(src: Path, out: Path, name: str | None = None, slug: str | None = No
             raise PackageError(f"{out} exists and was not created by omw2mwse; refusing to replace it")
     before = _tree_hashes(src)
     w = Writer(out)
-    res = build(src, w, name, data_prefix="Data Files", slug=slug, with_runtime=with_runtime,
+    res = build(src, w, name, data_prefix="Data Files", slug=slug, with_runtime=True,
                 meshes_from=[Path(meshes_from)] if meshes_from else None, mode=mode, sidecar=sidecar,
                 confirm=confirm, manifest=manifest, title=title, credits=credits)
     rows = ["# Mesh aliases (R4: Morrowind record mesh paths are limited to 31 chars)",

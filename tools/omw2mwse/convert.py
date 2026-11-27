@@ -34,6 +34,7 @@ from .build import (MANIFEST_NAME, MAX_PATH_CHARS, MAX_PATH_LIST, BuildError, Wr
                     renamed_plugin, notice_text, original_off_prefix, sha256b, text_bytes)
 from .optout import find_opt_out
 from .scan import load_manifest
+from .targets import refuse_protected
 
 MODES = ("normal", "hardcode")
 EXIT_OK, EXIT_ERROR, EXIT_REFUSED, EXIT_CONFLICT = 0, 2, 3, 4
@@ -289,12 +290,23 @@ def _tree_sig(p: Path) -> str:
 
 def convert(staged: Path, mode: str = "normal", *, name: str | None = None, source: Path | None = None,
             sidecar_path: Path | None = None, accept: bool = False, dry_run: bool = False, adopt: bool = False,
-            with_runtime: bool = True, meshes_from: list[Path] | None = None, interactive: bool | None = None,
+            meshes_from: list[Path] | None = None, interactive: bool | None = None,
             inp=None, err=None, manifest: dict | None = None, title: str | None = None,
-            credits: dict | None = None) -> dict:
-    """Returns the machine-readable result (also printed by `--json`)."""
+            credits: dict | None = None, strict_accept: bool = False) -> dict:
+    """Returns the machine-readable result (also printed by `--json`).
+
+    The staged folder is the only place written to, and the omwcompat runtime is always written
+    into it (0.3.1). A staged folder, --source, --sidecar or --meshes-from that is, or is inside,
+    a Data Files folder or a game install raises TargetRefused before anything is read or written.
+    strict_accept: a dry run decides the hard-code warning the way a real run would (refused
+    without `accept`, never prompting) instead of assuming it will be accepted."""
     if mode not in MODES:
         raise BuildError(f"mode must be one of {MODES}")
+    refuse_protected(staged, "staged folder")
+    for what, extra in (("--source", [source] if source else []), ("--sidecar", [sidecar_path] if sidecar_path else []),
+                        ("--meshes-from", list(meshes_from or []))):
+        for x in extra:
+            refuse_protected(x, what)
     staged = Path(staged).resolve()
     result = {"tool": "omw2mwse", "version": __version__, "requiresPython": REQUIRES_PYTHON, "command": "convert", "mode": mode, "dir": str(staged),
               "dryRun": dry_run, "mods": [], "alerts": [], "changed": False, "exitCode": EXIT_OK}
@@ -346,7 +358,8 @@ def convert(staged: Path, mode: str = "normal", *, name: str | None = None, sour
             entry = {"name": modname, "source": portable_path(src, staged),
                      "status": "ok", "verdict": "blocked", "reason": opt,
                      "alerts": [dict(opt, level="error")], "files": {}, "plugins": [], "conflicts": [], "rewrites": [],
-                     "hardcodeLog": [], "partialApis": [], "guards": {}, "changed": False}
+                     "hardcodeLog": [], "partialApis": [], "guards": {}, "changed": False,
+                     "blockers": [opt["message"]], "written": [], "removedFiles": []}
             if (staged / mod_dir(modname) / MANIFEST_NAME).is_file():
                 entry["alerts"].append({"level": "warning", "code": "previous-output-present",
                                         "message": f"{mod_dir(modname)} holds output from an earlier conversion; "
@@ -390,7 +403,7 @@ def convert(staged: Path, mode: str = "normal", *, name: str | None = None, sour
         def confirm(plan, _mod=modname, _box=warning_box):
             text = warn.render(_mod, plan.conversions, mode, plan.sidecar)
             _box["text"] = text
-            if dry_run:
+            if dry_run and not strict_accept:
                 return list(plan.conversions)  # plan only: tidy shows the warning, then re-runs with the accept flag
             return warn.confirm(text, plan.conversions, accept, interactive=interactive, inp=inp, err=err)
 
@@ -399,7 +412,7 @@ def convert(staged: Path, mode: str = "normal", *, name: str | None = None, sour
         if old_journal:
             entry["resumed"] = {"stage": old_journal.get("stage"), "journal": RC.journal_rel(modname)}
         try:
-            res = build(src, w, modname, off_name=offname, exclude=others, slug=None, with_runtime=with_runtime, meshes_from=mesh_dirs, mode=mode,
+            res = build(src, w, modname, off_name=offname, exclude=others, slug=None, with_runtime=True, meshes_from=mesh_dirs, mode=mode,
                         sidecar=sc, confirm=confirm, manifest=manifest, title=title, credits=credits,
                         meta_dirs=[staged])
         except warn.Refused as e:
@@ -416,6 +429,7 @@ def convert(staged: Path, mode: str = "normal", *, name: str | None = None, sour
         entry["off"] = original_off_prefix(offname).rstrip("/")
         entry.update({
             "status": "ok", "verdict": res.scan.verdict, "coverage": [ok, total],
+            "blockers": list(res.scan.blockers), "written": [], "removedFiles": [],
             "settings": {"groups": [g["key"] for g in res.scan.settings.get("groups", [])], "coverage": [so, st],
                          "mcm": bool(res.scan.settings.get("groups")) or bool(res.accepted)},
             "rewrites": [c.to_json() for c in res.accepted],
@@ -498,6 +512,7 @@ def convert(staged: Path, mode: str = "normal", *, name: str | None = None, sour
             except OSError:
                 pass
         files = {rel: sha256b(data) for rel, data in w.plan.items()}
+        entry["planned"] = sorted(rel for rel, st in w.status.items() if st in ("created", "updated"))
         man = {"tool": "omw2mwse", "version": __version__, "mod": modname, "source": entry["source"], "mode": mode,
                "files": files, "plugins": res.plugins}
         man_bytes = text_bytes(json.dumps(man, indent=1, sort_keys=True) + "\n")
@@ -509,6 +524,13 @@ def convert(staged: Path, mode: str = "normal", *, name: str | None = None, sour
         list_changed = False if dry_run else write_max_path_list(staged, f"Off/{offname}", too_long, original_off_prefix(offname))
         if journal:
             journal.finish()
+        if man_changed:
+            entry["planned"].append(man_rel)
+        if not dry_run:
+            entry["written"] = list(entry["planned"])
+            if list_changed and (staged / "Off" / offname / MAX_PATH_LIST).is_file():
+                entry["written"].append(f"Off/{offname}/{MAX_PATH_LIST}")
+            entry["removedFiles"] = sorted(w.removed)
         entry["changed"] = w.changed() or man_changed or bool(entry.get("relocated")) or list_changed
         result["changed"] = result["changed"] or entry["changed"]
         result["mods"].append(entry)

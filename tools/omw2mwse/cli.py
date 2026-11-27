@@ -1,6 +1,10 @@
 """Command line entry point: `python -m omw2mwse scan|package|convert|recover|api-audit ...`.
 
-Tidy-style invocation is also accepted:
+The tidy handoff (docs/TIDY_INTERFACE.md):
+    omw2mwse --staged-root <staged-mod-dir> --result-json <file> [--dry-run] [convert options]
+which is `omw2mwse convert --staged-root ...`: everything is written inside the staged folder,
+nothing else but the result file, and a Data Files folder or game install is refused (exit 3).
+The older form is also accepted:
     omw2mwse --convert-omwscripts[=normal|hardcode] <staged-mod-dir> [convert options]
 which is the same as `omw2mwse convert <staged-mod-dir> --mode MODE`.
 """
@@ -19,6 +23,8 @@ from .convert import EXIT_ERROR, EXIT_REFUSED, MODES, convert
 from . import apicatalog as AC
 from . import recovery as RC
 from .package import PackageError, package
+from . import tidy as TD
+from .targets import TargetRefused, refuse_protected
 from .scan import load_manifest, render_markdown, scan_mod
 
 
@@ -56,6 +62,7 @@ def cmd_scan(a) -> int:
     else:
         md = render_markdown(scans, title=a.title)
         if a.output:
+            refuse_protected(Path(a.output).parent, "report folder")
             Path(a.output).parent.mkdir(parents=True, exist_ok=True)
             with open(a.output, "w", encoding="utf-8", newline="\n") as f:
                 f.write(md)
@@ -76,9 +83,12 @@ def cmd_package(a) -> int:
             text = warn.render(a.name or Path(a.src).name, plan.conversions, mode, plan.sidecar)
             return warn.confirm(text, plan.conversions, a.accept_hardcode_conversions)
 
-        r = package(Path(a.src), Path(a.out), name=a.name, slug=a.slug, with_runtime=not a.no_runtime,
+        r = package(Path(a.src), Path(a.out), name=a.name, slug=a.slug,
                     meshes_from=Path(a.meshes_from) if a.meshes_from else None, force=a.force,
                     mode=mode, sidecar=sc, confirm=confirm, title=a.title, credits=_credits(a))
+    except TargetRefused as e:
+        print(f"omw2mwse: refused: {e}", file=sys.stderr)
+        return EXIT_REFUSED
     except warn.Refused as e:
         print(f"omw2mwse: refused: {e}", file=sys.stderr)
         return EXIT_REFUSED
@@ -98,13 +108,35 @@ def cmd_package(a) -> int:
 
 
 def cmd_convert(a) -> int:
+    if a.no_runtime:
+        print("omw2mwse: note: --no-runtime is ignored; the omwcompat runtime is always written into the staged folder",
+              file=sys.stderr)
+    if a.staged_root and a.dir and Path(a.staged_root) != Path(a.dir):
+        print("omw2mwse: error: the staged folder is given twice and differs (use --staged-root only)", file=sys.stderr)
+        return TD.EXIT_USAGE
+    root = a.staged_root or a.dir
+    if not root:
+        print("omw2mwse: error: a staged mod folder is required (--staged-root DIR)", file=sys.stderr)
+        return TD.EXIT_USAGE
+    if a.result_json or a.staged_root:
+        if not a.result_json:
+            print("omw2mwse: error: --staged-root needs --result-json FILE (the tidy handoff)", file=sys.stderr)
+            return TD.EXIT_USAGE
+        code = TD.run(root, a.result_json, dry_run=a.dry_run, mode=a.mode, name=a.name, source=a.source, sidecar=a.sidecar,
+                      accept=a.accept_hardcode_conversions, adopt=a.adopt_existing, meshes_from=a.meshes_from,
+                      title=a.title, credits=_credits(a))
+        print(f"omw2mwse: {'dry run: ' if a.dry_run else ''}exit {code}; result in {a.result_json}")
+        return code
     try:
-        r = convert(Path(a.dir), a.mode, name=a.name, source=Path(a.source) if a.source else None,
+        r = convert(Path(root), a.mode, name=a.name, source=Path(a.source) if a.source else None,
                     sidecar_path=Path(a.sidecar) if a.sidecar else None, accept=a.accept_hardcode_conversions,
-                    dry_run=a.dry_run, adopt=a.adopt_existing, with_runtime=not a.no_runtime,
+                    dry_run=a.dry_run, adopt=a.adopt_existing,
                     meshes_from=[Path(a.meshes_from)] if a.meshes_from else None, title=a.title, credits=_credits(a))
+    except TargetRefused as e:
+        print(f"omw2mwse: refused: {e}", file=sys.stderr)
+        return EXIT_REFUSED
     except (BuildError, SC.SidecarError) as e:
-        r = {"tool": "omw2mwse", "version": __version__, "requiresPython": REQUIRES_PYTHON, "command": "convert", "mode": a.mode, "dir": str(a.dir),
+        r = {"tool": "omw2mwse", "version": __version__, "requiresPython": REQUIRES_PYTHON, "command": "convert", "mode": a.mode, "dir": str(root),
              "mods": [], "alerts": [{"level": "error", "code": "error", "message": str(e)}], "changed": False,
              "exitCode": EXIT_ERROR}
     if a.json:
@@ -137,6 +169,11 @@ def cmd_convert(a) -> int:
 
 def cmd_recover(a) -> int:
     """Report (default) or roll back convert runs that did not finish (recovery journals)."""
+    try:
+        refuse_protected(a.dir, "staged folder")
+    except TargetRefused as e:
+        print(f"omw2mwse: refused: {e}", file=sys.stderr)
+        return EXIT_REFUSED
     staged = Path(a.dir).resolve()
     r = {"tool": "omw2mwse", "version": __version__, "requiresPython": REQUIRES_PYTHON, "command": "recover",
          "dir": str(staged), "rollback": bool(a.rollback), "rolledBack": [], "pendingRecovery": [], "alerts": [],
@@ -246,15 +283,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--name")
     p.add_argument("--title", help="display name for the MCM page")
     p.add_argument("--slug", help="short folder for mesh aliases (default: initials of the name)")
-    p.add_argument("--meshes-from", help="a Data Files/meshes folder to copy long-path meshes from")
-    p.add_argument("--no-runtime", action="store_true", help="do not bundle MWSE/lib/omwcompat")
+    p.add_argument("--meshes-from", help="a meshes folder to copy long-path meshes from (not a Data Files or game folder)")
+    p.add_argument("--no-runtime", action="store_true", help="ignored (since 0.3.1 the runtime is always bundled)")
     p.add_argument("--force", action="store_true", help="replace a previous omw2mwse output folder")
     p.add_argument("--mode", choices=MODES, help="normal (default) or hardcode (default when --sidecar is given)")
     hard_opts(p)
     p.set_defaults(func=cmd_package)
 
     c = sub.add_parser("convert", help="convert a staged mod folder in place (idempotent; entry point for tidy)")
-    c.add_argument("dir", help="staged mod folder (a Data Files root, e.g. a Vortex staging mod folder)")
+    c.add_argument("dir", nargs="?", help="staged mod folder (a Vortex staging mod folder; never Data Files or a game install); "
+                   "same as --staged-root but without the tidy result file and exit codes")
+    c.add_argument("--staged-root", metavar="DIR", help="the staged mod folder: tidy handoff mode (needs --result-json; "
+                   "see docs/TIDY_INTERFACE.md)")
+    c.add_argument("--result-json", metavar="FILE", help="write the tidy result here (outside the staged folder)")
     c.add_argument("--mode", choices=MODES, default="normal",
                    help="normal: scripts only, hard-code candidates reported as alerts; hardcode: also convert them")
     c.add_argument("--json", action="store_true", help="machine-readable result on stdout")
@@ -264,8 +305,8 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--source", help="the OpenMW mod folder to use when the staged folder holds several")
     c.add_argument("--adopt-existing", action="store_true",
                    help="treat existing output files without an omw2mwse manifest as ours (first run on a hand-installed folder)")
-    c.add_argument("--no-runtime", action="store_true", help="do not write MWSE/lib/omwcompat")
-    c.add_argument("--meshes-from", help="extra Data Files/meshes folder to copy long-path meshes from")
+    c.add_argument("--no-runtime", action="store_true", help="ignored (since 0.3.1 the runtime is always written into the staged folder)")
+    c.add_argument("--meshes-from", help="extra meshes folder to copy long-path meshes from (not a Data Files or game folder)")
     hard_opts(c)
     c.set_defaults(func=cmd_convert)
 
@@ -296,7 +337,29 @@ def translate_tidy_flag(argv: list[str]) -> list[str]:
     return ["convert"] + out + ["--mode", mode]
 
 
+SUBCOMMANDS = ("scan", "api-audit", "package", "convert", "recover")
+
+
+def translate_staged_root(argv: list[str]) -> list[str]:
+    """`omw2mwse --staged-root DIR --result-json F ...` (no subcommand) -> `convert --staged-root DIR ...`."""
+    if any(x == "--staged-root" or x.startswith("--staged-root=") for x in argv) and not any(x in SUBCOMMANDS for x in argv[:1]):
+        return ["convert"] + argv
+    return argv
+
+
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-    a = build_parser().parse_args(translate_tidy_flag(argv))
-    return a.func(a)
+    argv = translate_staged_root(translate_tidy_flag(argv))
+    contract = "--staged-root" in " ".join(argv) or any(x.startswith("--result-json") for x in argv)
+    try:
+        a = build_parser().parse_args(argv)
+    except SystemExit as e:
+        # tidy form: a usage error is 64, so that 2 only ever means "failed" (docs/TIDY_INTERFACE.md)
+        if contract and e.code == 2:
+            raise SystemExit(TD.EXIT_USAGE)
+        raise
+    try:
+        return a.func(a)
+    except TargetRefused as e:
+        print(f"omw2mwse: refused: {e}", file=sys.stderr)
+        return EXIT_REFUSED

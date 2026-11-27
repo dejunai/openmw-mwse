@@ -34,7 +34,7 @@ The output of `package` mirrors `Data Files`:
 Data Files/Off/<Mod>/OpenMW/...              complete original OpenMW package (author paths)
 Data Files/MWSE/mods/mwsuite/openmw/<Mod>/main.lua   generated loader (register with omwcompat)
 Data Files/MWSE/mods/mwsuite/openmw/<Mod>/omw/...    hosted .omwscripts + Lua
-Data Files/MWSE/lib/omwcompat.lua, omwcompat/ the runtime (unless --no-runtime)
+Data Files/MWSE/lib/omwcompat.lua, omwcompat/ the runtime (always)
 Data Files/meshes/, textures/, ...           original game assets (also under Off/)
 Data Files/meshes/omwc/<slug>/<hash>.nif     short aliases for long mesh paths
 Data Files/<Mod>-metadata.toml               MWSE metadata

@@ -1,7 +1,11 @@
 # Calling omw2mwse from tidy
 
 Conflict Tools' tidy pass (separate repo, not modified here) converts OpenMW Lua mods it
-finds in staged plugin folders by calling omw2mwse. This note is the contract. Tidy and
+finds in staged plugin folders by calling omw2mwse. **The current call is described in
+`docs/TIDY_INTERFACE.md` (`--staged-root DIR --result-json FILE`; interface 1, omw2mwse 0.3.1);
+the invocation below is the older form, still accepted.** The converter works only on a staged
+mod folder and never in Data Files or a game install (exit 3), and the omwcompat runtime is
+always written into the staged folder (`--no-runtime` is ignored). This note is the contract. Tidy and
 omw2mwse have agreed on the following, as well as the invocation and JSON below:
 
 - tidy reads `mods[].verdict`. `blocked` means tidy removes the conversion output;
@@ -82,7 +86,7 @@ returns the same dict that `--json` prints. Python 3.9+ stdlib only (`tomllib` w
 else a small built-in reader for the TOML omw2mwse reads); tested on 3.9 and 3.15. The JSON
 result carries `"requiresPython": ">=3.9"`.
 
-`<staged-mod-dir>` is a Data Files root (a Vortex staging mod folder). omw2mwse finds every
+`<staged-mod-dir>` is laid out like a Data Files root but is a Vortex staging mod folder (never the real Data Files or a game install: those are refused, exit 3). omw2mwse finds every
 folder below it that holds a `.omwscripts` file, outside `MWSE/` (for example a legacy
 `Off/OpenMW/LeaveTheLightsOff/` or a loose package at the folder root), and writes the
 MWSE build into the same folder. `package` uses the same layout under `OUT/Data Files/`.
@@ -129,7 +133,7 @@ are never written under `Off/`.
 | `MWSE/mods/mwsuite/openmw/<Mod>/README-mwsuite.md` | notice: unofficial mwsuite conversion, support goes to dej (dejunai) via the Nexus forums, credits |
 | `MWSE/mods/mwsuite/openmw/<Mod>/OMW2MWSE-REPORT.md` | human-readable report |
 | `MWSE/mods/mwsuite/openmw/<Mod>/omw2mwse-manifest.json` | files omw2mwse owns (SHA-256) and `plugins` (placement, status, path, reason); tidy `--undo` uses this |
-| `MWSE/lib/omwcompat.lua`, `MWSE/lib/omwcompat/` | runtime (skip with `--no-runtime`) |
+| `MWSE/lib/omwcompat.lua`, `MWSE/lib/omwcompat/` | runtime (always written; `--no-runtime` is ignored since 0.3.1) |
 | `meshes/`, `textures/`, `Sound/`, ... | original game assets, also kept under `Off/<Mod>/OpenMW/` |
 | `<Name>.esp` / `<Name>.esm` | root plugins that are required or undetermined (enabled by default), including an `.omwaddon` installed under an `.esp` name |
 | `Extras/<Mod>/...` | plugins that shipped in a package subfolder (not auto-enabled; tidy does not look inside `Extras/`) |
@@ -598,5 +602,5 @@ hand-written `MWSE/mods/<Mod>/main.lua` is left alone and reported (`legacy-load
 
 Each converted mod bundles the same `MWSE/lib/omwcompat` files. Vortex reports these as file
 conflicts between the mods; the files are identical, so either winner is fine. Keep all
-converted mods built by the same omw2mwse version, or ship the runtime as its own mod and
-pass `--no-runtime`.
+converted mods built by the same omw2mwse version (the runtime is always written into each
+staged mod since 0.3.1; `--no-runtime` is ignored).
