@@ -14,7 +14,7 @@ local function write(rel, text)
     local f = assert(io.open(SYN .. rel, "w")); f:write(text); f:close()
 end
 
--- results channel: print() -> mwse.log "[Locals] REC ..."
+-- results channel: print() -> library log "[Locals] REC ..."
 write("scripts/crea.lua", [[
 local self = require('openmw.self')
 local types = require('openmw.types')
@@ -104,7 +104,7 @@ mock.addMobile(player, { hp = 100 })
 
 local function recs(tag)
     local out = {}
-    for _, l in ipairs(W.logs) do
+    for _, l in ipairs(mock.allLogs()) do
         local rest = l:match("^%[Locals%] REC " .. tag .. "\t?(.*)$")
         if rest then out[#out + 1] = rest end
     end
@@ -127,10 +127,10 @@ local actorRecs = recs("actor")
 check(#actorRecs == 2, "ACTOR script attached to the NPC and the creature, not the player (got " .. #actorRecs .. ")")
 check(last("door") == "ex_door\tnil", "DOOR script attached to the door; I.AI is nil outside actor scripts")
 local badGlobal = false
-for _, l in ipairs(W.logs) do if l:find("bad_global.lua", 1, true) and l:find("openmw.self", 1, true) then badGlobal = true end end
+for _, l in ipairs(mock.allLogs()) do if l:find("bad_global.lua", 1, true) and l:find("openmw.self", 1, true) then badGlobal = true end end
 check(badGlobal, "a GLOBAL script cannot require openmw.self")
 local playerWarn = false
-for _, l in ipairs(W.logs) do if l:find("MENU of scripts/door.lua are not hosted", 1, true) then playerWarn = true end end
+for _, l in ipairs(mock.allLogs()) do if l:find("MENU of scripts/door.lua are not hosted", 1, true) then playerWarn = true end end
 check(playerWarn, "unhosted flags are reported, hosted flags of the same script still attach")
 check(last("globalsaw") == "kagouti", "global onActorActive still runs next to local scripts")
 
@@ -186,7 +186,7 @@ check(#recs("inactive") == before + 1, "a disabled object's scripts become inact
 
 section("errors")
 local errs = {}
-for _, line in ipairs(W.logs) do
+for _, line in ipairs(mock.allLogs()) do
     if line:find("ERROR", 1, true) and not line:find("bad_global", 1, true) then errs[#errs + 1] = line end
 end
 check(#errs == 0, "no runtime errors besides the intentional bad_global (" .. (errs[1] or "") .. ")")

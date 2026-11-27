@@ -75,14 +75,14 @@ Anything else is an internal error. Python 3.9+ (`requiresPython`).
 
 ```json
 {
- "tool": "omw2mwse", "version": "0.3.1", "interface": 1, "requiresPython": ">=3.9",
+ "tool": "omw2mwse", "version": "0.3.2", "interface": 1, "requiresPython": ">=3.9",
  "staged_root": "G:\\...\\mods\\MyMod",
  "dry_run": false,
  "exit_code": 0,
  "verdict": "ready",
  "blockers": [],
  "guards": ["activeDedupe", "safeIteration"],
- "runtime_version": "0.4.0",
+ "runtime_version": "0.4.4",
  "written_files": ["MWSE/lib/omwcompat.lua", "MWSE/lib/omwcompat/runtime.lua",
                    "MWSE/mods/mwsuite/openmw/M/main.lua",
                    "MWSE/mods/mwsuite/openmw/M/omw2mwse-manifest.json"],

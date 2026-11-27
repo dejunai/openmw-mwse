@@ -118,7 +118,7 @@ mock.addMobile(player, { hp = 100 })
 
 local function recs(tag)
     local out = {}
-    for _, l in ipairs(W.logs) do
+    for _, l in ipairs(mock.allLogs()) do
         local rest = l:match("^%[%w+%] REC " .. tag .. "\t?(.*)$")
         if rest then out[#out + 1] = rest end
     end
@@ -127,7 +127,7 @@ end
 local function last(tag) local r = recs(tag); return r[#r] end
 local function logsWith(s)
     local n = 0
-    for _, l in ipairs(W.logs) do if l:find(s, 1, true) then n = n + 1 end end
+    for _, l in ipairs(mock.allLogs()) do if l:find(s, 1, true) then n = n + 1 end end
     return n
 end
 
@@ -160,7 +160,7 @@ check(#recs("fallback") == 50, "the 50 fallback timers ran (got " .. #recs("fall
 check(last("fallback") == "50\t0", "no text-key handler was called")
 check(c["I.AnimationController.playBlendedAnimation"] == 50 and c["openmw.animation.playBlended"] == 50, "50 + 50 play calls counted")
 check(logsWith("animations are not ported") == 2, "still two warnings after 100 more calls (no spam)")
-check(logsWith("ERROR") == 0, "no runtime errors (" .. tostring(W.logs[#W.logs]) .. ")")
+check(logsWith("ERROR") == 0, "no runtime errors (" .. tostring(mock.allLogs()[#mock.allLogs()]) .. ")")
 
 section("disposition")
 wthief:sendEvent("Disp", {})
@@ -212,7 +212,7 @@ else
     rt2.objects.wrap(npc):addScript("scripts/tpickpocket_local.lua")
     mock2.frames(300, 0.1)
     local errs, warns = {}, 0
-    for _, l in ipairs(W2.logs) do
+    for _, l in ipairs(mock2.allLogs()) do
         if l:find("ERROR", 1, true) then errs[#errs + 1] = l end
         if l:find("animations are not ported", 1, true) then warns = warns + 1 end
     end

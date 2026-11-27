@@ -15,8 +15,8 @@ local function write(rel, text)
     local f = assert(io.open(SYN .. rel, "w")); f:write(text); f:close()
 end
 local function logsWith(s, from)
-    local out = {}
-    for i = (from or 1), #W.logs do if W.logs[i]:find(s, 1, true) then out[#out + 1] = W.logs[i] end end
+    local out, logs = {}, mock.allLogs()
+    for i = (from or 1), #logs do if logs[i]:find(s, 1, true) then out[#out + 1] = logs[i] end end
     return out
 end
 
@@ -116,13 +116,13 @@ section("periodic log line (config timingLogSeconds)")
 W.config = { omwcompat = { timing = true, timingLogSeconds = 0.000001 } }
 rt.loadTimingConfig()
 check(T.logEvery == 0.000001, "timingLogSeconds read from config/omwcompat.json")
-local from = #W.logs + 1
+local from = #mock.allLogs() + 1
 local t0 = os.clock()
 while os.clock() - t0 < 0.002 do end
 mock.frames(1, 0.1)
 while os.clock() - t0 < 0.004 do end
 mock.frames(1, 0.1)
-check(#logsWith("[omwcompat " .. rt.VERSION .. "] timing: omwcompat " .. rt.VERSION .. ":", from) >= 1, "a timing line goes to MWSE.log")
+check(#logsWith("[omwcompat " .. rt.VERSION .. "] timing: omwcompat " .. rt.VERSION .. ":", from) >= 1, "a timing line goes to the library log")
 W.config = { omwcompat = { timing = false, timingLogSeconds = 0 } }
 rt.loadTimingConfig()
 local calls = (function() for _, e in ipairs(T.snapshot().scripts) do if e.mod == "Busy" and e.handler == "onUpdate" then return e.calls end end end)()
@@ -144,7 +144,7 @@ check(#logsWith("further errors in scripts/broken.lua onUpdate suppressed") == 1
 
 section("types.NPC.getFactions / getFactionRank / isExpelled")
 local recs = {}
-for _, l in ipairs(W.logs) do
+for _, l in ipairs(mock.allLogs()) do
     local id, ids, thief = l:match("^%[Fac%] REC fac\t([^\t]+)\t([^\t]*)\t(%a+)$")
     if id then recs[id] = { ids = ids, thief = thief } end
 end

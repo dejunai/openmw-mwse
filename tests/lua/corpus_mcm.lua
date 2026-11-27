@@ -13,7 +13,7 @@ dofile("Data Files/MWSE/mods/mwsuite/openmw/" .. name .. "/main.lua")
 local rt = require("omwcompat")
 mock.fire("initialized", {})
 mock.fire("modConfigReady", {})
-for _, l in ipairs(W.logs) do
+for _, l in ipairs(mock.allLogs()) do
     if l:find("probe") or l:find("renderer") then print("log\t" .. l) end
 end
 local reg = rt.settings.registry

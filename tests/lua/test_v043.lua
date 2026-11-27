@@ -61,7 +61,7 @@ mock.addMobile(player, { hp = 100 })
 
 local function recs(tag)
     local out = {}
-    for _, l in ipairs(W.logs) do
+    for _, l in ipairs(mock.allLogs()) do
         local rest = l:match("^%[YawTest%] REC " .. tag .. "\t?(.*)$")
         if rest then out[#out + 1] = rest end
     end
@@ -70,7 +70,7 @@ end
 local function last(tag) local r = recs(tag); return r[#r] end
 local function logsWith(s)
     local n = 0
-    for _, l in ipairs(W.logs) do if l:find(s, 1, true) then n = n + 1 end end
+    for _, l in ipairs(mock.allLogs()) do if l:find(s, 1, true) then n = n + 1 end end
     return n
 end
 
@@ -128,7 +128,7 @@ else
     mock2.fire("referenceDeactivated", { reference = ref })
     mock2.frames(5, 0.1)
     local errs, yawWarn, animWarn = {}, 0, 0
-    for _, l in ipairs(W2.logs) do
+    for _, l in ipairs(mock2.allLogs()) do
         if l:find("ERROR", 1, true) then errs[#errs + 1] = l end
         if l:find("self.controls.yawChange cannot be set", 1, true) then yawWarn = yawWarn + 1 end
         if l:find("animations are not ported", 1, true) then animWarn = animWarn + 1 end

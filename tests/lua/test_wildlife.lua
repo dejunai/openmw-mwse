@@ -104,7 +104,7 @@ check(d == nil or d.omwcompat_id == nil, "no reference data written for Wildlife
 
 section("errors")
 local errs = {}
-for _, line in ipairs(W.logs) do if line:find("ERROR", 1, true) or line:find("WARNING", 1, true) then errs[#errs + 1] = line end end
+for _, line in ipairs(mock.allLogs()) do if line:find("ERROR", 1, true) or line:find("WARNING", 1, true) then errs[#errs + 1] = line end end
 check(#errs == 0, "no runtime errors or warnings (" .. (errs[1] or "") .. ")")
 print(string.format("\n%d passed, %d failed", pass, fail))
 os.exit(fail == 0 and 0 or 1)

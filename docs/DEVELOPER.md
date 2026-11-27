@@ -194,6 +194,23 @@ bin/omw2mwse scan path/to/mod --no-openmw             # scan without the catalog
   50 more writes, `onInactive` finishes, and the original `tpickpocket_local.lua` deactivates
   without an error when the untracked corpus is present.
 
+## omwcompat 0.4.4 / omw2mwse 0.3.2: library log
+
+- **Why.** Dej asked that MWSE.log keep only initialization lines. Post-init output is debug,
+  and converted mods must not spam MWSE.log the way other authors' mods do.
+- **Where.** `runtime.lua` opens `Data Files/MWSE/logs/omwcompat.log` at load (folder created
+  with `lfs`, previous file kept as `omwcompat.log.prev`, every line flushed). `RT.warn` /
+  `warnOnce` / `RT.log` / `reportError` / hosted `print()` / the sound gate / the timing line /
+  a settings reload / `RT.note` all write there. MWSE.log gets the `loaded` banner, a pointer
+  to the file, and each `registered <mod>` line. See [RUNTIME.md](RUNTIME.md#library-log-044).
+- **Converter.** omw2mwse 0.3.2: generated `main.lua` sends a BUILT_FOR mismatch through
+  `omwcompat.note or mwse.log`, so 0.4.4 writes it to the library log and older runtimes still
+  log it. Already-converted mods do not need a re-convert for `print()` or runtime warnings
+  (those are the shim); they do if the BUILT_FOR line should leave MWSE.log.
+- **Tests.** `tests/lua/test_v044.lua`: rotation of `.prev`, the exact MWSE.log init lines,
+  `print()` / warnings / errors staying off MWSE.log, `RT.note`, and fallback to MWSE.log when
+  the file cannot be opened. `tests/lua/test_versions.lua` covers the `note` hook and the
+  older-runtime fallback.
 
 ## Further reading
 

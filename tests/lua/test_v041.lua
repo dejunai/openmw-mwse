@@ -152,7 +152,7 @@ check(startsOf(off1) == 0 and startsOf(off2) == 0 and startsOf(off3) == 0, "off 
 check(loopsAt(100) == 0 and loopsAt(300) == 0 and loopsAt(500) == 0, "nothing is heard where the torches are off")
 check(rt.soundGate.offCopy > blockedBefore, "sound gate counted the blocked starts (" .. rt.soundGate.offCopy .. ")")
 local gateLines = 0
-for _, l in ipairs(W.logs) do if l:find("sound gate: kept", 1, true) then gateLines = gateLines + 1 end end
+for _, l in ipairs(mock.allLogs()) do if l:find("sound gate: kept", 1, true) then gateLines = gateLines + 1 end end
 check(gateLines == 1, "one sound gate line in the log, later cases only counted")
 -- a sound some script starts on a tombstoned reference is blocked too
 local e = { reference = torch, sound = FIRE, flags = 1 }
@@ -249,7 +249,7 @@ else
     check(not t1.disabled and not t2.disabled and W.loops[t1] and W.loops[t2], "NFiBW: torches lit again with their loop")
     check((W.loopStarts[t1] or 0) == 2 and (W.loopStarts[t2] or 0) == 2, "NFiBW: one start before the rain, one after")
     local errs = 0
-    for _, l in ipairs(W.logs) do if l:find("ERROR", 1, true) then errs = errs + 1; print("    " .. l) end end
+    for _, l in ipairs(mock.allLogs()) do if l:find("ERROR", 1, true) then errs = errs + 1; print("    " .. l) end end
     check(errs == 0, "NFiBW: no runtime errors")
 end
 
@@ -274,7 +274,7 @@ else
     mock.fire("initialized", {})
     mock.fire("modConfigReady", {})
     local notHosted, fallback = 0, 0
-    for _, l in ipairs(W.logs) do
+    for _, l in ipairs(mock.allLogs()) do
         if l:find("are not hosted", 1, true) then notHosted = notHosted + 1 end
         if l:find("fallback control", 1, true) then fallback = fallback + 1 end
     end

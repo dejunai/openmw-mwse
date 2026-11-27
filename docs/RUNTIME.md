@@ -1,7 +1,7 @@
 # omwcompat runtime
 
 omwcompat is an MWSE Lua library at `Data Files/MWSE/lib/omwcompat.lua` plus `omwcompat/`.
-It runs OpenMW GLOBAL, object-attached, CUSTOM and PLAYER scripts unmodified. Version 0.4.3.
+It runs OpenMW GLOBAL, object-attached, CUSTOM and PLAYER scripts unmodified. Version 0.4.4.
 
 ## Layout
 
@@ -39,7 +39,7 @@ The complete original package is `Off/<Mod>/OpenMW/<original paths>`.
 ## Script host
 
 - Each script gets its own environment through `setfenv`. The environment holds safe globals and a
-  `print` that writes to MWSE.log with a prefix.
+  `print` that writes to the library log (`Data Files/MWSE/logs/omwcompat.log`) with a prefix.
 - The `require` inside a script maps `openmw.*` and `openmw_aux.*` to the shims. Any other name
   loads a module relative to the mod root (`a.b` becomes `a/b.lua` or `a/b/init.lua`).
 - Scripts are re-instantiated on every MWSE `loaded` event, as OpenMW does when a game loads:
@@ -55,7 +55,7 @@ The complete original package is `Off/<Mod>/OpenMW/<original paths>`.
   5. Call `onUpdate(dt)`. `dt` is 0 in menu mode, which matches OpenMW's paused world.
   6. Local scripts' `onUpdate(dt)`, then PLAYER scripts' `onFrame(dt)` with the real frame time (also while paused, 0.4.0).
 - `referenceActivated` queues `onObjectActive`. Tombstoned, disabled and deleted references are skipped.
-- Every handler runs inside `xpcall`. Errors go to MWSE.log, at most 5 per site; only the
+- Every handler runs inside `xpcall`. Errors go to the library log, at most 5 per site; only the
   first error of a site gets a `debug.traceback` (0.3.2), later ones are logged with the
   message only (2-5) or just counted, so a handler that fails every frame stays cheap. The
   counts are in the timing snapshot (`errors`).
@@ -115,14 +115,17 @@ limits: [GAPS.md](GAPS.md#per-mod-enabled-switch-040).
 
 ## Runtime version check (0.3.1)
 
-Each generated `main.lua` declares the omwcompat it was built with (`local BUILT_FOR = "0.4.0"`,
+Each generated `main.lua` declares the omwcompat it was built with (`local BUILT_FOR = "0.4.4"`,
 also passed to `register` as `runtimeVersion`). Vortex deploys one copy of the shared
 `MWSE/lib/omwcompat` files, so a mod may run on a different runtime. When `omwcompat.VERSION`
-differs, `main.lua` writes exactly one line to MWSE.log, e.g.
-`[omwcompat 0.3.1] SomeMod was built for omwcompat 0.2.2 (loaded 0.3.1)`; the check lives
-in `main.lua` so it works with older runtimes too. Nothing is logged when they match. If the
-loaded runtime cannot host some of the mod's script flags, its "not hosted" warning ends with
-`(built for omwcompat X, loaded Y)` (runtimes 0.3.1 and later).
+differs, `main.lua` writes exactly one line, e.g.
+`[omwcompat 0.3.1] SomeMod was built for omwcompat 0.2.2 (loaded 0.3.1)`. Since omw2mwse 0.3.2
+that line goes through `omwcompat.note` to the library log when the loaded runtime is 0.4.4 or
+newer, and falls back to MWSE.log on older runtimes (`omwcompat.note or mwse.log`). The check
+lives in `main.lua` so it still works if an older copy of the library won in Vortex. Nothing is
+logged when they match. If the loaded runtime cannot host some of the mod's script flags, its
+"not hosted" warning ends with `(built for omwcompat X, loaded Y)` (runtimes 0.3.1 and later)
+and also goes to the library log (0.4.4).
 
 ## Guards (0.3.2)
 
@@ -169,7 +172,7 @@ end
 
 `omwcompat.getTimings` is `timing.snapshot`; `timing.reset()` and `timing.setEnabled(on)` exist
 too. Each `delta` / `line` consumer name has its own window, so several readers do not disturb
-each other. An optional periodic line goes to MWSE.log when
+each other. An optional periodic line goes to the library log when
 `Data Files/MWSE/config/omwcompat.json` holds `{ "timingLogSeconds": 10 }` (0 or no file: off);
 `"timing": false` turns the counters off. omwcompat never writes that file.
 
@@ -308,6 +311,31 @@ base disposition (Morrowind has one per NPC, the player argument is ignored);
 each field logs one line (`self.controls.<name> cannot be set: movement controls are not
 emulated...`); later writes are ignored silently. Thieves Pickpocket's `onInactive` always
 writes `yawChange = 0` in `stopTracking`, and must still run `finishApology` afterwards.
+
+## Library log (0.4.4)
+
+MWSE.log gets only initialization lines, so converted mods and the runtime do not spam it:
+
+- `[omwcompat 0.4.4] loaded`
+- `[omwcompat 0.4.4] library log: Data Files/MWSE/logs/omwcompat.log`
+- `[omwcompat 0.4.4] registered <Mod> (N script(s)). <notice>` once per registered mod
+
+Everything else (warnings, errors with tracebacks, stub / sound-gate / BUILT_FOR notes, the
+optional timing line, debug `RT.log`, hosted scripts' `print()`, and a settings-tab failure)
+goes to `Data Files/MWSE/logs/omwcompat.log`. Relative `io.open` paths resolve from the
+Morrowind install root, which is MWSE's working directory. `Data Files/MWSE/` already holds
+`lib/`, `mods/` and `config/`; `logs/` sits beside them and is not overwritten when Vortex
+deploys the library folder (a log under `lib/omwcompat/` would be). `lfs` creates the folder
+if it is missing. At session start the previous file is renamed to `omwcompat.log.prev` (one
+copy is kept) and a new file is opened; each line is timestamped (`YYYY-MM-DD HH:MM:SS`) and
+flushed so a crash does not drop it. If the file cannot be opened, one MWSE.log line says so
+and further messages fall back to MWSE.log. Per-site `warnOnce` and the 5-error cap are
+unchanged. Hosted scripts still have no `mwse` table: OpenMW mods use `print()`, and injecting
+`mwse` would make a dual-engine script take the MWSE path.
+
+A generated `main.lua` from before omw2mwse 0.3.2 still writes its BUILT_FOR mismatch line to
+MWSE.log; re-convert the mod to move that line into the library log. A missing-runtime error
+from `main.lua` always stays on MWSE.log, because the library never loaded.
 
 ## Activation dispatch
 

@@ -394,6 +394,7 @@ class RuntimeVersionTests(unittest.TestCase):
         main = render_main("M", [], {})
         self.assertIn(f'local BUILT_FOR = "{runtime_version()}"', main)
         self.assertIn("runtimeVersion = BUILT_FOR", main)
+        self.assertIn("omwcompat.note or mwse.log", main)
         self.assertIn('local BUILT_FOR = "0.2.2"', render_main("M", [], {}, runtime="0.2.2"))
 
 

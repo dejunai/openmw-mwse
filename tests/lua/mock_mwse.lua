@@ -19,7 +19,8 @@ M.deepcopy = deepcopy
 
 function M.install(opts)
     opts = opts or {}
-    local W = { objects = {}, scripts = {}, objectList = {}, cells = {}, logs = {}, handlers = {}, crimes = {}, frame = 0,
+    local W = { objects = {}, scripts = {}, objectList = {}, cells = {}, logs = {}, libLogs = {}, captured = {},
+        handlers = {}, crimes = {}, frame = 0,
         files = opts.files or {}, mods = opts.mods or { ["morrowind.esm"] = true } }
     M.W = W
 
@@ -28,6 +29,7 @@ function M.install(opts)
         log = function(fmt, ...)
             local s = select("#", ...) > 0 and string.format(fmt, ...) or tostring(fmt)
             W.logs[#W.logs + 1] = s
+            W.captured[#W.captured + 1] = { dest = "mwse", text = s }
             if os.getenv("MOCK_VERBOSE") then io.stderr:write(s, "\n") end
         end,
         loadConfig = function(name, defaults) return deepcopy(W.config and W.config[name] or defaults) end,
@@ -424,8 +426,92 @@ function M.install(opts)
         end,
         register = function() end,
     }
-    _G.lfs = { attributes = function() return nil end, dir = function() return function() end end }
+    -- Real-enough lfs for omwcompat's library log (mkdir + attributes). MWSE ships lfs;
+    -- the box LuaJIT does not, so the mock talks to the real filesystem.
+    local function _norm(path)
+        return path and path:gsub("\\", "/"):gsub("/+$", "") or path
+    end
+    local function _isDir(path)
+        path = _norm(path)
+        local f = io.open(path .. "/.", "r")
+        if f then f:close(); return true end
+        return false
+    end
+    local function _isFile(path)
+        path = _norm(path)
+        if _isDir(path) then return false end
+        local f = io.open(path, "r")
+        if f then f:close(); return true end
+        return false
+    end
+    _G.lfs = {
+        attributes = function(path, field)
+            path = _norm(path)
+            if not path then return nil end
+            local mode
+            if _isDir(path) then mode = "directory"
+            elseif _isFile(path) then mode = "file"
+            else return nil end
+            if field == "mode" then return mode end
+            if field then return nil end
+            return { mode = mode }
+        end,
+        mkdir = function(path)
+            path = _norm(path)
+            if _isDir(path) then return true end
+            local quoted = path:gsub("'", "'\\''")
+            os.execute("mkdir -p '" .. quoted .. "'")
+            if _isDir(path) then return true end
+            return nil, "mkdir failed"
+        end,
+        dir = function() return function() end end,
+    }
     package.preload["lfs"] = function() return _G.lfs end
+
+    -- Capture writes to the library log (and still write the real file).
+    -- LuaJIT file handles are userdata, so we return a proxy table instead of
+    -- attaching methods to the handle.
+    if not M._realIoOpen then M._realIoOpen = io.open end
+    local real_open = M._realIoOpen
+    io.open = function(path, mode)
+        local f, err = real_open(path, mode)
+        if not f then return nil, err end
+        local n = path and tostring(path:gsub("\\", "/")) or ""
+        if n == "Data Files/MWSE/logs/omwcompat.log" and mode and mode:find("w", 1, true) then
+            local proxy = {}
+            function proxy:write(...)
+                local s = table.concat({ ... })
+                local body = s
+                if body:sub(-1) == "\n" then body = body:sub(1, -2) end
+                local Wnow = M.W
+                if Wnow and body ~= "" then
+                    for line in (body .. "\n"):gmatch("(.-)\n") do
+                        if line ~= "" then
+                            local msg = line:match("^%d%d%d%d%-%d%d%-%d%d %d%d:%d%d:%d%d  (.+)$")
+                            Wnow.libLogs = Wnow.libLogs or {}
+                            Wnow.captured = Wnow.captured or {}
+                            if not msg and #Wnow.libLogs > 0 then
+                                -- continuation (debug.traceback is multi-line)
+                                Wnow.libLogs[#Wnow.libLogs] = Wnow.libLogs[#Wnow.libLogs] .. "\n" .. line
+                                local cap = Wnow.captured[#Wnow.captured]
+                                if cap and cap.dest == "lib" then cap.text = Wnow.libLogs[#Wnow.libLogs] end
+                            else
+                                msg = msg or line
+                                Wnow.libLogs[#Wnow.libLogs + 1] = msg
+                                Wnow.captured[#Wnow.captured + 1] = { dest = "lib", text = msg }
+                            end
+                        end
+                    end
+                end
+                return f:write(...)
+            end
+            function proxy:flush() return f:flush() end
+            function proxy:close() return f:close() end
+            function proxy:seek(...) return f:seek(...) end
+            return proxy
+        end
+        return f, err
+    end
 
     ------------------------------------------------------------ actors (mobiles)
     -- t = { hp, fight, flee, dead, pkg = tes3.aiPackage value or nil, sticky = combat sets inCombat }
@@ -563,6 +649,19 @@ function M.install(opts)
     end
     W.inSave = true -- copies created during play are saved (not sourceless)
     return M
+end
+
+-- All log lines in write order: MWSE.log and the library log (timestamps stripped).
+function M.allLogs()
+    local out = {}
+    for _, e in ipairs((M.W and M.W.captured) or {}) do out[#out + 1] = e.text end
+    return out
+end
+function M.libLogs()
+    return (M.W and M.W.libLogs) or {}
+end
+function M.mwseLogs()
+    return (M.W and M.W.logs) or {}
 end
 
 -- helpers for assertions

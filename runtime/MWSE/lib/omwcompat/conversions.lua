@@ -84,7 +84,11 @@ function C.build(mods, addTab, saveMod)
     for _, m in ipairs(C.sorted(mods)) do
         local ok, res = pcall(addTab, template, m, C.aboutLines(m))
         summaries[m.name] = ok and res or { error = tostring(res) }
-        if not ok then mwse.log("[omwcompat] tab for %s failed: %s", m.name, tostring(res)) end
+        if not ok then
+            local rt = package.loaded["omwcompat.runtime"] or package.loaded["omwcompat"]
+            if rt and rt.warn then rt.warn("tab for %s failed: %s", m.name, tostring(res))
+            else mwse.log("[omwcompat] tab for %s failed: %s", m.name, tostring(res)) end
+        end
     end
     template:register()
     return summaries, template

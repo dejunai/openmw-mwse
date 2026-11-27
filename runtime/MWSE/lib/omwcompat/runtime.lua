@@ -13,7 +13,7 @@ local timing = require("omwcompat.timing")
 local guards = require("omwcompat.guards")
 local player = require("omwcompat.player")
 
-local RT = { VERSION = "0.4.3", API_REVISION = 70, PROBE_API_REVISION = 100 }
+local RT = { VERSION = "0.4.4", API_REVISION = 70, PROBE_API_REVISION = 100 }
 local LOCAL_FLAG_NAMES
 objects.init(RT)
 settings.init(RT)
@@ -56,18 +56,138 @@ local state = {
 RT._state = state
 
 ---------------------------------------------------------------- logging
+-- MWSE.log gets only initialization lines (the version banner, a pointer to this
+-- file, and one "registered <mod> (N scripts)" line per mod). Everything else
+-- (warnings, errors, stub counts, sound-gate notices, BUILT_FOR notes, debug,
+-- and hosted scripts' print()) goes to Data Files/MWSE/logs/omwcompat.log.
+-- io.open relative paths resolve from the Morrowind install root, which is MWSE's
+-- cwd; Data Files/MWSE/ already holds lib/, mods/ and config/, so logs/ sits
+-- beside them and is not overwritten when Vortex deploys the library folder.
+RT.LOG_PATH = "Data Files/MWSE/logs/omwcompat.log"
+RT.LOG_PREV = "Data Files/MWSE/logs/omwcompat.log.prev"
+
 local warned = {}
 local errCount = timing.errors   -- where -> count; shared with timing snapshots
+local logFile, logOpened, logFallback, logOpenError
+local announced = false
+
+local function closeLog()
+    local prev = logFile
+    if mwse and mwse._omwcompatLogFile then
+        prev = prev or mwse._omwcompatLogFile
+        mwse._omwcompatLogFile = nil
+    end
+    logFile = nil
+    if prev then pcall(function() prev:flush(); prev:close() end) end
+end
+
+local function ensureDir(dir)
+    local okL, lfs = pcall(require, "lfs")
+    if not okL or not lfs or not lfs.mkdir then return nil, "lfs.mkdir is not available" end
+    local acc = ""
+    for part in dir:gmatch("[^/\\]+") do
+        acc = acc == "" and part or (acc .. "/" .. part)
+        if lfs.attributes(acc, "mode") ~= "directory" then
+            local made, err = lfs.mkdir(acc)
+            if not made and lfs.attributes(acc, "mode") ~= "directory" then
+                return nil, err or ("cannot create " .. acc)
+            end
+        end
+    end
+    return true
+end
+
+-- Returns nil on success, or an error string and sets logFallback.
+-- Keeps one previous copy (omwcompat.log.prev). Used at session start and by tests.
+function RT.openLibraryLog()
+    closeLog()
+    logOpened, logFallback, logOpenError = true, false, nil
+    local dir = RT.LOG_PATH:match("^(.+)/[^/]+$")
+    local ok, err = ensureDir(dir)
+    if not ok then
+        logFallback, logOpenError = true, err
+        return err
+    end
+    local okL, lfs = pcall(require, "lfs")
+    if okL and lfs and lfs.attributes(RT.LOG_PATH, "mode") == "file" then
+        pcall(os.remove, RT.LOG_PREV)
+        pcall(os.rename, RT.LOG_PATH, RT.LOG_PREV)
+    end
+    local f, oerr = io.open(RT.LOG_PATH, "w")
+    if not f then
+        logFallback, logOpenError = true, oerr or "open failed"
+        return logOpenError
+    end
+    logFile = f
+    if mwse then mwse._omwcompatLogFile = f end
+    return nil
+end
+
+local function writeLib(line)
+    if not logOpened then
+        local err = RT.openLibraryLog()
+        if logFile then
+            logFile:write(os.date("%Y-%m-%d %H:%M:%S") .. "  [omwcompat " .. RT.VERSION .. "] session start", "\n")
+            logFile:flush()
+        else
+            logOpenError = logOpenError or err
+        end
+    end
+    if logFile then
+        logFile:write(os.date("%Y-%m-%d %H:%M:%S") .. "  " .. line, "\n")
+        logFile:flush()
+    else
+        mwse.log("%s", line)
+    end
+end
+
+-- Public hook used by generated main.lua (omw2mwse 0.3.2+):
+--   (omwcompat.note or mwse.log)(fmt, ...).
+-- Older main.lua files still call mwse.log for the BUILT_FOR mismatch; re-convert
+-- to move that line into the library log. A missing-runtime error stays on MWSE.log
+-- because this library never loaded.
+function RT.note(fmt, ...)
+    writeLib(string.format(fmt, ...))
+end
 function RT.log(fmt, ...)
     if not RT.debug then return end
-    mwse.log("[omwcompat] " .. string.format(fmt, ...))
+    writeLib("[omwcompat] " .. string.format(fmt, ...))
 end
-function RT.warn(fmt, ...) mwse.log("[omwcompat] WARNING: " .. string.format(fmt, ...)) end
+function RT.warn(fmt, ...)
+    writeLib("[omwcompat] WARNING: " .. string.format(fmt, ...))
+end
 function RT.warnOnce(key, fmt, ...)
     if warned[key] then return end
     warned[key] = true
     RT.warn(fmt, ...)
 end
+function RT.logFallback() return logFallback end
+function RT.logOpenError() return logOpenError end
+
+-- One-time MWSE.log banner and pointer. Further messages go to the library log
+-- (or stay on MWSE.log if the file could not be opened).
+local function announce()
+    if announced then return end
+    announced = true
+    if not logOpened then
+        local err = RT.openLibraryLog()
+        if logFile then
+            logFile:write(os.date("%Y-%m-%d %H:%M:%S") .. "  [omwcompat " .. RT.VERSION .. "] session start", "\n")
+            logFile:flush()
+        else
+            logOpenError = logOpenError or err
+        end
+    end
+    mwse.log("[omwcompat %s] loaded", RT.VERSION)
+    if logFallback then
+        mwse.log("[omwcompat %s] could not open %s (%s); further messages go to MWSE.log",
+            RT.VERSION, RT.LOG_PATH, tostring(logOpenError or "unknown"))
+    else
+        mwse.log("[omwcompat %s] library log: %s", RT.VERSION, RT.LOG_PATH)
+    end
+end
+RT.announce = announce
+
 -- The first error of each `where` is logged with a traceback; errors 2-5 with the message
 -- only; later ones are just counted (timing snapshots carry the counts). A traceback is
 -- built only for the first error of a `where`, so a handler that fails every frame stays cheap.
@@ -75,8 +195,8 @@ local function reportError(where, err)
     local n = (errCount[where] or 0) + 1
     errCount[where] = n
     if n <= 5 then
-        mwse.log("[omwcompat] ERROR in %s: %s", where, tostring(err))
-        if n == 5 then mwse.log("[omwcompat] (further errors in %s suppressed; they are counted)", where) end
+        writeLib(string.format("[omwcompat] ERROR in %s: %s", where, tostring(err)))
+        if n == 5 then writeLib(string.format("[omwcompat] (further errors in %s suppressed; they are counted)", where)) end
     end
 end
 local currentWhere
@@ -714,7 +834,7 @@ local function makeEnv(m, S)
     env.print = function(...)
         local p = {}
         for i = 1, select("#", ...) do p[i] = tostring((select(i, ...))) end
-        mwse.log("[%s] %s", m.name, table.concat(p, "\t"))
+        writeLib(string.format("[%s] %s", m.name, table.concat(p, "\t")))
     end
     env._G = env
     -- omw2mwse hard-code conversions call omwcompat.cfg(key, original value)
@@ -1298,8 +1418,8 @@ function RT.onAddSound(e)
     if g[why] == 1 then
         local sid = e.sound and e.sound.id or "?"
         local oid = ref.object and ref.object.id or "?"
-        mwse.log("[omwcompat] sound gate: kept %s from playing on %s (%s), as OpenMW does; further cases are counted, not logged",
-            tostring(sid), tostring(oid), why == "removed" and "an object a script removed" or "a light that is off by default")
+        writeLib(string.format("[omwcompat] sound gate: kept %s from playing on %s (%s), as OpenMW does; further cases are counted, not logged",
+            tostring(sid), tostring(oid), why == "removed" and "an object a script removed" or "a light that is off by default"))
     end
     return false
 end
@@ -1390,7 +1510,7 @@ local function maybeLogTiming()
     if not timingLogAt then timingLogAt = now + every; timing.delta("log"); return end
     if now < timingLogAt then return end
     timingLogAt = now + every
-    mwse.log("[omwcompat %s] timing: %s", RT.VERSION, timing.line("log", 5))
+    writeLib(string.format("[omwcompat %s] timing: %s", RT.VERSION, timing.line("log", 5)))
 end
 local frameWork
 function RT.onEnterFrame(e)
@@ -1493,7 +1613,7 @@ function RT.reloadMod(m)
         RT.detachLocal(key)
         if ref then RT.attachLocal(ref) end
     end
-    mwse.log("[omwcompat] %s reloaded to apply changed settings", m.name)
+    writeLib(string.format("[omwcompat] %s reloaded to apply changed settings", m.name))
     return true
 end
 
@@ -1730,4 +1850,5 @@ RT.settings = settings
 RT.objects = objects
 RT.util = util
 RT.serial = serial
+announce()
 return RT

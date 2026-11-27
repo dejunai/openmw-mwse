@@ -160,12 +160,12 @@ check(not lit(lantern), "not applied while the menu is open")
 mock.mcmClose(tpl)
 W.menuMode = false
 local reloaded = false
-for _, l in ipairs(W.logs) do if l:find("reloaded to apply changed settings") then reloaded = true end end
+for _, l in ipairs(mock.allLogs()) do if l:find("reloaded to apply changed settings") then reloaded = true end end
 check(reloaded, "closing the MCM reloaded the mod's scripts")
 mock.frames(120)
 check(lit(lantern), "rain now counts as dark: original lit")
 local errs = 0
-for _, l in ipairs(W.logs) do if l:find("ERROR") or l:find("error in") then errs = errs + 1; print("    " .. l) end end
+for _, l in ipairs(mock.allLogs()) do if l:find("ERROR") or l:find("error in") then errs = errs + 1; print("    " .. l) end end
 check(errs == 0, "no runtime errors after the reload")
 
 section("LTLO: settings survive save/load and do not touch the save")
@@ -195,7 +195,7 @@ local function walk(c) if c.kind == "Info" then infos = infos + 1 end for _, ch 
 walk(synT)
 check(infos >= 1, "inputBinding shown as info text")
 local warned = false
-for _, l in ipairs(W.logs) do if l:find("custom renderer 'SuperSlider'", 1, true) then warned = true end end
+for _, l in ipairs(mock.allLogs()) do if l:find("custom renderer 'SuperSlider'", 1, true) then warned = true end end
 check(warned, "custom renderer logged once")
 
 section("synthetic: storage + subscribers")

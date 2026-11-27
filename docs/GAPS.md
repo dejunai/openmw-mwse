@@ -26,7 +26,7 @@
    transition instead of the end. Checklist item 5 tests this.
 3. **Script paths.** The loader uses `loadfile("Data Files/MWSE/mods/mwsuite/openmw/<Mod>/omw/...")` and `io.open`, relative
    to the game folder, which is the working directory MWSE normally has. A different working
-   directory would make the script fail to load, and MWSE.log would show it.
+   directory would make the script fail to load, and the library log (or MWSE.log if the log file could not be opened) would show it.
 4. **Replacer detection** reads loose files with `io.open` and checks their sizes. This works for
    loose DLR/RR meshes. Files inside a BSA are reported as missing, which matches the mod's intent.
 5. **Scripted lights** are not skipped. That matches the original LTLO, but Dej's port skipped them.

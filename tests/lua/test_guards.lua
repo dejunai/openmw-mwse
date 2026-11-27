@@ -21,8 +21,9 @@ end
 local function recs(mod, kind, from)
     local out = {}
     local pre = "[" .. mod .. "] REC " .. kind
-    for i = (from or 1), #W.logs do
-        local l = W.logs[i]
+    local logs = mock.allLogs()
+    for i = (from or 1), #logs do
+        local l = logs[i]
         if l:sub(1, #pre) == pre then
             local parts = {}
             for p in l:sub(#pre + 2):gmatch("[^\t]+") do parts[#parts + 1] = p end
@@ -58,7 +59,7 @@ return {}
 ]])
 
 local rt = require("omwcompat")
-check(rt.VERSION == "0.4.3", "runtime 0.4.3 (" .. rt.VERSION .. ")")
+check(rt.VERSION == "0.4.4", "runtime 0.4.4 (" .. rt.VERSION .. ")")
 rt.register({ mod = "ACGuarded", root = FIX, scripts = {
     { flags = { "GLOBAL" }, path = "scripts/ActiveCollect/global.lua", guards = { "activeDedupe", "safeIteration" } } } })
 rt.register({ mod = "ACPlain", root = FIX, scripts = {
@@ -90,7 +91,7 @@ check(g[1] and g[1][1] == "true", "guarded next() with a vanished key restarts i
 check(p[1] and p[1][1] == "false", "control next() raises 'invalid key to next'")
 g, p = recs("IterGuarded", "plain"), recs("IterPlain", "plain")
 check(g[1] and p[1] and g[1][1] == p[1][1] and g[1][2] == p[1][2], "plain table.insert/remove unchanged: " .. tostring(g[1] and g[1][1]))
-local function logHas(s) for _, l in ipairs(W.logs) do if l:find(s, 1, true) then return true end end return false end
+local function logHas(s) for _, l in ipairs(mock.allLogs()) do if l:find(s, 1, true) then return true end end return false end
 check(logHas("unknown guard bogusGuard ignored"), "unknown guard name: one warning")
 check(logHas("IterGuarded scripts/iter.lua: next() got a key that is no longer in the table"), "first restart logged once")
 
@@ -142,7 +143,7 @@ local function walkTo(mod, id)
 end
 check(walkTo("ACGuarded", "torch_a"), "guarded walk reaches torch_a")
 refs[2]:delete()
-local from = #W.logs + 1
+local from = #mock.allLogs() + 1
 mock.frames(4, 0.1)
 local r = recs("ACGuarded", "tick", from)
 check(r[1] and r[1][1] == "2" and r[1][2] == "-", "frame 1: torch_b is invalid and removed at the cursor (size 2)")

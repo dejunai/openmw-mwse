@@ -114,7 +114,7 @@ pm.bounty, pm.levelUpProgress = 40, 3
 
 local function recs(tag)
     local out = {}
-    for _, l in ipairs(W.logs) do
+    for _, l in ipairs(mock.allLogs()) do
         local rest = l:match("^%[Main%] REC " .. tag .. "\t?(.*)$")
         if rest then out[#out + 1] = rest end
     end
@@ -123,7 +123,7 @@ end
 local function last(tag) local r = recs(tag); return r[#r] end
 local function errors()
     local out = {}
-    for _, l in ipairs(W.logs) do if l:find("ERROR", 1, true) or l:find("error in", 1, true) then out[#out + 1] = l end end
+    for _, l in ipairs(mock.allLogs()) do if l:find("ERROR", 1, true) or l:find("error in", 1, true) then out[#out + 1] = l end end
     return out
 end
 
@@ -204,14 +204,15 @@ check(not pcall(V.remove, wnpc), "removeScript of a script that is not attached 
 
 section("Enabled switch: off and on mid-game")
 local before = V.ticks()
-local logsAt = #W.logs
+local logsAt = #mock.allLogs()
 V.timer(0.25)
 mock.mcmSet(mainSwitch, false)
 check(W.config and W.config["omwcompat_Main"] and W.config["omwcompat_Main"].enabled == false, "the switch is saved per mod")
 mock.frames(5, 0.1)
 check(V.ticks() == before, "global onUpdate stops")
 local fired = false
-for i = logsAt + 1, #W.logs do if W.logs[i]:find("REC timer", 1, true) then fired = true end end
+local _logs = mock.allLogs()
+for i = logsAt + 1, #_logs do if _logs[i]:find("REC timer", 1, true) then fired = true end end
 check(not fired, "timers stop")
 local nKeys = #recs("key")
 mock.fire("keyDown", { keyCode = 35 })

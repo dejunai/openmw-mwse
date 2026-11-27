@@ -68,7 +68,7 @@ check(sc and sc.scale == 1.5, "scale preserved")
 local pc = copyAt(900)
 check(pc and pc.object.mesh == "l\\light_paper_lantern_01.nif", "R4 fallback: paper lantern keeps template mesh when alias missing")
 local warned = false
-for _, l in ipairs(W.logs) do if l:find("longer than 31 chars") then warned = true end end
+for _, l in ipairs(mock.allLogs()) do if l:find("longer than 31 chars") then warned = true end end
 check(warned, "R4 fallback logged a warning")
 local maxMesh = 0
 for _, o in ipairs(W.objectList) do if o.mesh and #o.mesh > maxMesh then maxMesh = #o.mesh end end
@@ -123,7 +123,7 @@ mock.frames(60)
 section("save / load round trip")
 local snap = mock.save()
 check(type(player.data.omwcompat_LeaveTheLightsOff) == "string", "payload stored as one string in tes3.player.data")
-local logsBefore = #W.logs
+local logsBefore = #mock.allLogs()
 mock.load(snap)
 check(tes3.player.data.omwcompat_LeaveTheLightsOff ~= nil, "mock kept the player data through load")
 
@@ -138,7 +138,8 @@ mock.frames(240)
 check(#offCopies() == 3, "after load: still exactly 3 off copies (no duplicates)")
 check(lantern.disabled and tombed(lantern), "after load: original still tombstoned")
 local regen = false
-for i = logsBefore, #W.logs do if W.logs[i]:find("Regenerating") then regen = true end end
+local _logs = mock.allLogs()
+for i = logsBefore, #_logs do if _logs[i]:find("Regenerating") then regen = true end end
 check(not regen, "after load: generated records not regenerated (model map persisted)")
 gen = 0
 for _, o in ipairs(W.objectList) do if o.id:find("^Generated:") then gen = gen + 1 end end
@@ -178,7 +179,7 @@ check(copyAt(500) ~= nil and street.disabled, "streetlight is off again after th
 
 section("errors")
 local errs = 0
-for _, l in ipairs(W.logs) do if l:find("ERROR") then errs = errs + 1; print("    " .. l:sub(1, 300)) end end
+for _, l in ipairs(mock.allLogs()) do if l:find("ERROR") then errs = errs + 1; print("    " .. l:sub(1, 300)) end end
 check(errs == 0, "no runtime errors logged")
 
 print(string.format("\n%d passed, %d failed", pass, fail))

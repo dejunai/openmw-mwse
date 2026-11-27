@@ -1,4 +1,4 @@
-"""omw2mwse 0.3.1: the tidy handoff (docs/TIDY_INTERFACE.md). Output lands only under the staged
+"""omw2mwse 0.3.2: the tidy handoff (docs/TIDY_INTERFACE.md). Output lands only under the staged
 root, Data Files / game installs are refused, the runtime is always included (stdlib unittest;
 Python 3.9+). Written for omw2mwse by dej (dejunai)."""
 from __future__ import annotations
