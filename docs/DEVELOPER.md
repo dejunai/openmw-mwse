@@ -165,6 +165,23 @@ bin/omw2mwse scan path/to/mod --no-openmw             # scan without the catalog
   0.4.0 behaviour that reproduces the runaway, then the fixed run; the original No Fires in Bad
   Weather and ThievesPickpocket settings when the untracked corpus is present.
 
+## omwcompat 0.4.2: animations degrade quietly, NPC disposition
+
+- **Why.** Before 0.4.2 `require('openmw.animation')` raised "module ... is not supported", so a
+  script that requires it never started (Thieves Pickpocket's `tpickpocket_local.lua`, in game
+  2026-11-26). Animations stay out of scope; the API is there so the rest of the mod runs.
+- **Where.** `actors.lua` `animationModule(modName)`, `animationControllerInterface(modName)`,
+  `animNote` / `animCalls`; `runtime.lua` `buildModules` adds `openmw.animation` for every script,
+  `makeInterfaces` adds `I.AnimationController` for actor scripts. `actors.lua`
+  `getDisposition` / `getBaseDisposition` / `setBaseDisposition` / `modifyBaseDisposition`.
+  See [RUNTIME.md](RUNTIME.md#animations-042).
+- **Converter.** Unchanged (omw2mwse 0.3.1): `manifest.json` keeps `openmw.animation` in
+  `unsupportedModules`, so scanner verdicts and coverage numbers do not move.
+- **Tests.** `tests/lua/test_v042.lua`: every `openmw.animation` / `I.AnimationController` call,
+  the safe return values, one warning per mod across 100 more calls and a save/load, a gesture
+  finished by the mod's own timer, disposition, and the original `tpickpocket_local.lua` running
+  300 frames without an error when the untracked corpus is present.
+
 ## Further reading
 
 - [RUNTIME.md](RUNTIME.md): how the emulation works, local scripts, object-lifecycle rules.

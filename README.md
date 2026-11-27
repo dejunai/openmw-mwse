@@ -97,7 +97,10 @@ Contact dej (dejunai) via the Nexus Mods forums for the exact wording.
 
 ## Known limits
 
-- Not provided yet: `openmw.animation`, `openmw.camera`, `openmw.postprocessing`,
+- Animations are not ported: since omwcompat 0.4.2 `openmw.animation` and
+  `I.AnimationController` exist so scripts keep running, but every call does nothing and answers
+  "not playing" (one log line per mod).
+- Not provided yet: `openmw.camera`, `openmw.postprocessing`,
   `openmw.debug`, `openmw.menu`, `openmw.content`, `openmw_aux.ui`, and `openmw.ui` beyond
   `showMessage` (no windows, layouts or HUD elements). `openmw.ambient` and `openmw.input` are
   partial.

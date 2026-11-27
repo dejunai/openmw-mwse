@@ -1,7 +1,7 @@
 # omwcompat runtime
 
 omwcompat is an MWSE Lua library at `Data Files/MWSE/lib/omwcompat.lua` plus `omwcompat/`.
-It runs OpenMW GLOBAL, object-attached, CUSTOM and PLAYER scripts unmodified. Version 0.4.1.
+It runs OpenMW GLOBAL, object-attached, CUSTOM and PLAYER scripts unmodified. Version 0.4.2.
 
 ## Layout
 
@@ -273,6 +273,33 @@ value is a flat table of numbers and/or booleans (ThievesPickpocket's `tpMultiNu
 `tpMultiSelect`) gets one MCM control per key: sliders using the renderer argument's per-key
 `min`/`max`/`integer`, on/off buttons for booleans, labels from `aliases`. Changing one key writes
 the whole table back. Other custom renderers keep the fallback control and its warning.
+
+## Animations (0.4.2)
+
+Animations are not ported. So that a mod which plays a gesture or waits for a text key keeps
+running, `require('openmw.animation')` works in every hosted script and actor local scripts have
+`I.AnimationController`; every call is a no-op:
+
+- `hasAnimation`, `isPlaying`, `isLoopingAnimation`, `hasGroup`, `hasBone` return `false`;
+  `getCurrentTime`, `getCompletion`, `getLoopCount`, `getSpeed`, `getActiveGroup`,
+  `getTextKeyTime` return `nil` (OpenMW's answers for an animation that is not playing).
+- `playBlended`, `playQueued`, `cancel`, `setSpeed`, `setLoopingEnabled`, `clearAnimationQueue`,
+  `skipAnimationThisFrame`, `addGlow`, `addVfx`, `removeVfx`, `removeAllVfx` do nothing; a name
+  not in this list is a no-op function too.
+- `PRIORITY`, `BLEND_MASK` and `BONE_GROUP` have OpenMW's values.
+- `I.AnimationController` (version 1): `playBlendedAnimation` does nothing; handlers given to
+  `addTextKeyHandler`, `addPlayBlendedAnimationHandler` and `addAnimationEndedHandler` are
+  accepted and never called. Mods that end a gesture on a text key need their own timer
+  fallback (Thieves Pickpocket has one).
+
+The first call of each mod logs one line
+(`<mod>: <call> does nothing: animations are not ported by omwcompat ...`); later calls are
+counted in `omwcompat.actors.animCalls[mod][name]`. The scanner still lists `openmw.animation`
+as unsupported, so verdicts do not change: the mod runs, its animations do not play.
+
+`types.NPC.getDisposition` / `getBaseDisposition` (0.4.2) read the NPC instance's effective /
+base disposition (Morrowind has one per NPC, the player argument is ignored);
+`setBaseDisposition` / `modifyBaseDisposition` write the base value, clamped to 0..100.
 
 ## Activation dispatch
 

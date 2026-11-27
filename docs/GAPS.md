@@ -54,7 +54,8 @@
 - Hosted script kinds: GLOBAL; object-attached NPC, CREATURE, ACTOR, CONTAINER, DOOR, LIGHT,
   ACTIVATOR (0.3.0); CUSTOM and PLAYER (0.4.0). MENU scripts only run in the settings probe
   (0.4.1: their settings reach the MCM; menu handlers are not run). LOAD and ITEM scripts are
-  skipped with a warning. `camera`, `animation`, `postprocessing`, `menu`, `content` and `debug` are not
+  skipped with a warning. `animation` and `I.AnimationController` are quiet no-ops (0.4.2: no
+  animation plays, one log line per mod). `camera`, `postprocessing`, `menu`, `content` and `debug` are not
   provided; `ui` is `showMessage` only (no layouts, widgets, templates or HUD).
 - Local scripts differ from OpenMW in a few documented ways:
   - An instance is dropped when its object leaves the active cells and recreated when it comes

@@ -13,7 +13,7 @@ local timing = require("omwcompat.timing")
 local guards = require("omwcompat.guards")
 local player = require("omwcompat.player")
 
-local RT = { VERSION = "0.4.1", API_REVISION = 70, PROBE_API_REVISION = 100 }
+local RT = { VERSION = "0.4.2", API_REVISION = 70, PROBE_API_REVISION = 100 }
 local LOCAL_FLAG_NAMES
 objects.init(RT)
 settings.init(RT)
@@ -503,6 +503,8 @@ local function buildModules(m, S)
             end,
         }),
     }
+    -- openmw.animation: present so animation calls degrade to quiet no-ops (see actors.lua, 0.4.2)
+    modules["openmw.animation"] = actors.animationModule(m.name)
     if S.isLocal then
         -- local scripts: openmw.self / openmw.nearby exist, openmw.world does not (OpenMW rule)
         modules["openmw.world"] = nil
@@ -682,10 +684,12 @@ function RT.makeInterfaces(m, S)
     }
     local Settings = settings.interface(m, S)
     local AI = S.isActor and actors.aiInterface(function() return S.self end) or nil
+    local AnimationController = S.isActor and actors.animationControllerInterface(m.name) or nil
     return setmetatable({}, {
         __index = function(_, k)
             if k == "Activation" then return Activation end
             if k == "AI" and AI then return AI end
+            if k == "AnimationController" and AnimationController then return AnimationController end
             if k == "Settings" then return Settings end
             local v = scriptInterfaces[k]
             if v == nil and S.probe then return settings.dummy end

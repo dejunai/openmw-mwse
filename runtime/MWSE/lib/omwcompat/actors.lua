@@ -4,8 +4,10 @@
 --   types.Actor.stats.ai.<fight|flee|alarm|hello>(actor)       -> mobile.<stat>, base from aiConfig
 --   types.Actor.isDead(actor)                                  -> mobile.isDead
 --   types.NPC.getFactions / getFactionRank / isExpelled        -> npc.faction / factionRank, player faction flags
+--   types.NPC.getDisposition / getBaseDisposition (0.4.2)       -> npc instance .disposition / .baseDisposition
 --   openmw.nearby                                              -> references in tes3.getActiveCells()
 --   I.AI (actor local scripts)                                 -> mobile:startCombat / tes3.setAI* / aiPlanner
+--   openmw.animation, I.AnimationController                    -> quiet no-ops (0.4.2): animations are not ported
 -- Every mapping is by rule (OpenMW name -> MWSE field), never per mod. Actors whose
 -- mobile is not loaded (outside the active cells) fall back to their base record values.
 -- MIT, Copyright (c) 2026 dej (dejunai).
@@ -589,6 +591,43 @@ function M.extendTypes(types)
             T.isExpelled = M.isExpelled
         end
     end
+    if types.NPC then
+        types.NPC.getDisposition = M.getDisposition
+        types.NPC.getBaseDisposition = M.getBaseDisposition
+        types.NPC.setBaseDisposition = M.setBaseDisposition
+        types.NPC.modifyBaseDisposition = M.modifyBaseDisposition
+    end
+end
+
+-- Disposition (0.4.2). Morrowind keeps one disposition per NPC (toward the player), so the
+-- player argument is accepted and ignored. getDisposition is the effective value MWSE reports
+-- (all modifiers applied), getBaseDisposition the base value; both fall back to the record.
+local function dispositionField(actor, field, fname)
+    local ref = objects.refOf(actor)
+    if not ref then error("types.NPC." .. fname .. ": invalid NPC", 3) end
+    local o = ref.object
+    local ok, d = pcall(function() return o[field] end)
+    if ok and type(d) == "number" then return d, ref end
+    ok, d = pcall(function() return o.baseDisposition end)
+    if ok and type(d) == "number" then return d, ref end
+    local b = baseObject(ref)
+    ok, d = pcall(function() return b.baseDisposition or b.disposition end)
+    if ok and type(d) == "number" then return d, ref end
+    rt.warnOnce("disposition " .. tostring(o and o.id), "types.NPC.%s: %s has no disposition; 50 is returned", fname, tostring(o and o.id))
+    return 50, ref
+end
+function M.getDisposition(actor, _) return (dispositionField(actor, "disposition", "getDisposition")) end
+function M.getBaseDisposition(actor, _) return (dispositionField(actor, "baseDisposition", "getBaseDisposition")) end
+function M.setBaseDisposition(actor, _, value)
+    if type(value) ~= "number" then error("types.NPC.setBaseDisposition: value must be a number", 2) end
+    local _, ref = dispositionField(actor, "baseDisposition", "setBaseDisposition")
+    local v = math.max(0, math.min(100, math.floor(value + 0.5)))
+    local ok = pcall(function() ref.object.baseDisposition = v end)
+    if not ok then rt.warnOnce("setBaseDisposition", "types.NPC.setBaseDisposition: MWSE refused the write; ignored") end
+end
+function M.modifyBaseDisposition(actor, player, value)
+    if type(value) ~= "number" then error("types.NPC.modifyBaseDisposition: value must be a number", 2) end
+    M.setBaseDisposition(actor, player, M.getBaseDisposition(actor) + value)
 end
 
 ---------------------------------------------------------------- nearby
@@ -772,6 +811,69 @@ function M.aiInterface(getSelf)
         return ok and f == true
     end
     return AI
+end
+
+---------------------------------------------------------------- animations (0.4.2)
+-- Animations are not ported: MWSE plays keyframe files a different way and OpenMW's animation
+-- blending has no MWSE counterpart. openmw.animation and I.AnimationController are still there,
+-- so a mod that plays a gesture or listens for a text key keeps running: every call does nothing
+-- and answers like an actor whose animation is not playing (isPlaying false, times nil, no text
+-- keys ever fire). The first call of each mod is logged once; later calls are only counted
+-- (M.animCalls[mod][name]).
+M.animCalls = {}
+local ANIM_FALSE = { hasAnimation = true, isPlaying = true, isLoopingAnimation = true, hasGroup = true, hasBone = true }
+local ANIM_NIL = { getTextKeyTime = true, getCurrentTime = true, getCompletion = true, getLoopCount = true,
+    getSpeed = true, getActiveGroup = true }
+local ANIM_NOOP = { skipAnimationThisFrame = true, cancel = true, setLoopingEnabled = true, setSpeed = true,
+    clearAnimationQueue = true, playQueued = true, playBlended = true, addGlow = true, addVfx = true,
+    removeVfx = true, removeAllVfx = true }
+local ANIM_CONST = {
+    PRIORITY = { Default = 0, WeaponLowerBody = 1, SneakIdleLowerBody = 2, SwimIdle = 3, Jump = 4, Movement = 5,
+        Hit = 6, Weapon = 7, Block = 8, Knockdown = 9, Torch = 10, Storm = 11, Death = 12, Scripted = 13 },
+    BLEND_MASK = { LowerBody = 1, Torso = 2, LeftArm = 4, RightArm = 8, UpperBody = 14, All = 15 },
+    BONE_GROUP = { LowerBody = 1, Torso = 2, LeftArm = 3, RightArm = 4 },
+}
+
+local function animNote(modName, what)
+    local c = M.animCalls[modName]
+    if not c then c = {}; M.animCalls[modName] = c end
+    c[what] = (c[what] or 0) + 1
+    rt.warnOnce("animation " .. modName,
+        "%s: %s does nothing: animations are not ported by omwcompat %s (openmw.animation and I.AnimationController calls are skipped; further calls are counted, not logged)",
+        modName, what, rt.VERSION)
+end
+M.animNote = animNote
+
+-- openmw.animation for one mod's script
+function M.animationModule(modName)
+    local A = {}
+    for k, v in pairs(ANIM_CONST) do
+        local t = {}
+        for n, x in pairs(v) do t[n] = x end
+        A[k] = t
+    end
+    for k in pairs(ANIM_FALSE) do A[k] = function() animNote(modName, "openmw.animation." .. k); return false end end
+    for k in pairs(ANIM_NIL) do A[k] = function() animNote(modName, "openmw.animation." .. k); return nil end end
+    for k in pairs(ANIM_NOOP) do A[k] = function() animNote(modName, "openmw.animation." .. k) end end
+    return setmetatable(A, {
+        -- a name this list does not know (a newer API): a no-op function, logged once
+        __index = function(_, k)
+            if type(k) ~= "string" then return nil end
+            return function() animNote(modName, "openmw.animation." .. k) end
+        end,
+    })
+end
+
+-- I.AnimationController (actor local scripts): the handlers are accepted and never called
+function M.animationControllerInterface(modName)
+    local function noop(name) return function() animNote(modName, "I.AnimationController." .. name) end end
+    return {
+        version = 1,
+        playBlendedAnimation = noop("playBlendedAnimation"),
+        addPlayBlendedAnimationHandler = noop("addPlayBlendedAnimationHandler"),
+        addAnimationEndedHandler = noop("addAnimationEndedHandler"),
+        addTextKeyHandler = noop("addTextKeyHandler"),
+    }
 end
 
 return M

@@ -1,6 +1,6 @@
 {
  "runtime": "omwcompat",
- "version": "0.4.1",
+ "version": "0.4.2",
  "statuses": {
   "full": "emulated with OpenMW semantics",
   "partial": "emulated with documented differences",
@@ -242,6 +242,8 @@
   "openmw.types.Miscellaneous.records": "partial",
   "openmw.types.NPC.EQUIPMENT_SLOT": "full",
   "openmw.types.NPC.STANCE": "full",
+  "openmw.types.NPC.getBaseDisposition": "partial",
+  "openmw.types.NPC.getDisposition": "partial",
   "openmw.types.NPC.getEquipment": "partial",
   "openmw.types.NPC.getFactionRank": "full",
   "openmw.types.NPC.getFactions": "full",
@@ -251,9 +253,11 @@
   "openmw.types.NPC.isDead": "full",
   "openmw.types.NPC.isExpelled": "partial",
   "openmw.types.NPC.isWerewolf": "full",
+  "openmw.types.NPC.modifyBaseDisposition": "partial",
   "openmw.types.NPC.objectIsInstance": "full",
   "openmw.types.NPC.record": "partial",
   "openmw.types.NPC.records": "partial",
+  "openmw.types.NPC.setBaseDisposition": "partial",
   "openmw.types.NPC.setEquipment": "partial",
   "openmw.types.NPC.setStance": "partial",
   "openmw.types.NPC.stats.ai.alarm": "partial",
@@ -546,7 +550,13 @@
   "quests": "Player.quests(p)[id]: stage get/set (journal index), started, finished (Finished flag of the current entry), addJournalEntry (tes3.updateJournal); iterating all quests is unsupported",
   "owner": "tes3.getOwner/setOwner: recordId (NPC) or factionId + factionRank (MWSE requiredRank)",
   "removed in OpenMW 0.51": "legacySymbols: async.newRealTimer, newUnsavableRealTimer, self.ownerRecordId, types.Actor/Item.record(s) and types.<Actor>.equipment are not in OpenMW 0.51's API; omwcompat still provides them for older mods and the scanner accepts them; api-audit does not list them",
-  "sendEvent": "delivered next frame to the object's hosted local scripts (dropped when it has none and the event is not built in); built-in events ShowMessage (player), Unequip and PlaySound3d run after the mod's handlers"
+  "sendEvent": "delivered next frame to the object's hosted local scripts (dropped when it has none and the event is not built in); built-in events ShowMessage (player), Unequip and PlaySound3d run after the mod's handlers",
+  "openmw.animation": "0.4.2: present so scripts keep running; every call is a no-op answering 'not playing' (one log line per mod). Still unsupported: no animation plays.",
+  "I.AnimationController": "0.4.2: actor scripts get it; playBlendedAnimation does nothing, handlers are accepted and never called.",
+  "openmw.types.NPC.getDisposition": "0.4.2: the NPC's effective disposition as MWSE reports it (Morrowind keeps one, toward the player; the player argument is ignored).",
+  "openmw.types.NPC.getBaseDisposition": "0.4.2: the NPC instance's base disposition; the player argument is ignored.",
+  "openmw.types.NPC.setBaseDisposition": "0.4.2: writes the NPC instance's base disposition, rounded and clamped to 0..100; the player argument is ignored.",
+  "openmw.types.NPC.modifyBaseDisposition": "0.4.2: base disposition plus the value, rounded and clamped to 0..100; the player argument is ignored."
  },
  "settingsRenderers": {
   "checkbox": "full",
