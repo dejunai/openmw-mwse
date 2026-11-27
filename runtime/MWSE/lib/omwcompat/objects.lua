@@ -1,7 +1,9 @@
 -- omwcompat.objects: GameObject / Cell / Record wrappers and openmw.types emulation.
 -- Implements the lifecycle rules from DESIGN.md section 5.3:
 --   R1 remove()   : content-file refs are disabled + tombstoned (ref.data flag);
---                   runtime-created refs are disabled + deleted.
+--                   runtime-created refs are disabled + deleted. Either way the sounds
+--                   playing on the reference are stopped first (0.4.1): Morrowind keeps a
+--                   disabled light's loop playing, OpenMW does not (see runtime.lua sound gate).
 --   R2 teleport() : a new object of record X placed on a tombstoned ref of X
 --                   (same cell, within EPS units) resurrects that ref instead.
 --   R3 moveInto() : during an activation, moving X into the activator's inventory
@@ -74,6 +76,20 @@ local function isTomb(ref)
     return d and d.omwcompat_removed == true
 end
 M.isTomb = isTomb
+
+-- Records made by world.createRecord (runtime.lua newGeneratedId): "Generated:0x<hex>".
+local function isGeneratedId(id)
+    return type(id) == "string" and id:lower():match("^generated:0x%x+$") ~= nil
+end
+M.isGeneratedId = isGeneratedId
+
+-- Stops every sound playing on a reference (its own loop included). Morrowind does not stop
+-- a light's loop when the reference is disabled, so removed and disabled objects would keep
+-- crackling where nothing is visible. Errors are ignored: silencing is best effort.
+local function silence(ref)
+    if ref and tes3.removeSound then pcall(tes3.removeSound, { reference = ref }) end
+end
+M.silence = silence
 
 local function setTomb(ref, on)
     local cid = contentId(ref)
@@ -488,7 +504,10 @@ local getters = {
     end,
     recordId = function(w, ref)
         if rawget(w, "_limbo") then return normId(rawget(w, "_recordId")) end
-        return ref and lowerId(ref.object) or nil
+        if ref then return lowerId(ref.object) end
+        -- 0.4.1: like OpenMW, a removed object keeps its recordId (No Fires in Bad Weather reads
+        -- light.recordId right after light:remove() to find the record to put back)
+        return rawget(w, "_removedRecordId")
     end,
     type = function(w, ref)
         if ref and tes3.player and ref == tes3.player then return types.Player end
@@ -660,7 +679,7 @@ OBJ.__newindex = function(w, k, v)
         end
         local ref = refOf(w)
         if not ref then error("GameObject.enabled: invalid object", 2) end
-        if v then ref:enable() else ref:disable() end
+        if v then ref:enable() else ref:disable(); silence(ref) end
         return
     end
     error("GameObject fields are read-only (" .. tostring(k) .. ")", 2)
@@ -689,6 +708,8 @@ function methods:remove(count)
     if rawget(self, "_limbo") then rawset(self, "_gone", true); return end
     local ref = refOf(self)
     if not ref or ref.deleted or isTomb(ref) then return end
+    silence(ref)
+    rawset(self, "_removedRecordId", lowerId(ref.object))
     if not contentId(ref) and hasLuaData(ref) and ref.data.omwcompat_created then
         ref:disable()
         ref:delete()

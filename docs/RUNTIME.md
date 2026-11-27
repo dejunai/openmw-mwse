@@ -1,7 +1,7 @@
 # omwcompat runtime
 
 omwcompat is an MWSE Lua library at `Data Files/MWSE/lib/omwcompat.lua` plus `omwcompat/`.
-It runs OpenMW GLOBAL, object-attached, CUSTOM and PLAYER scripts unmodified. Version 0.4.0.
+It runs OpenMW GLOBAL, object-attached, CUSTOM and PLAYER scripts unmodified. Version 0.4.1.
 
 ## Layout
 
@@ -214,6 +214,13 @@ These rules turn OpenMW's "objects are values" model into Morrowind references.
 - **R1 `remove()`**
   - A content reference is disabled and tombstoned. The tombstone set is saved in `omwcompat_rt`.
   - A reference created by omwcompat is disabled and deleted.
+  - (0.4.1) Either way the sounds playing on the reference are stopped first
+    (`tes3.removeSound{ reference = ref }`): Morrowind keeps a disabled light's loop playing.
+    `GameObject.enabled = false` does the same.
+  - (0.4.1) The removed object keeps its `recordId`, as in OpenMW (No Fires in Bad Weather reads
+    it right after `remove()`). `isValid()` is false and `count` is 0.
+  - A removed reference is never reported active again: `referenceActivated` and
+    `objectBecameActive` skip disabled and tombstoned references.
 - **R2 `world.createObject(id):teleport(cell, pos, {rotation})`**
   - If a tombstoned reference of the same record lies within 2 units in the target cell, it is
     re-enabled and returned. This avoids reference growth with day/night swaps.
@@ -234,6 +241,38 @@ These rules turn OpenMW's "objects are values" model into Morrowind references.
 
 Generated records get ids `Generated:0x<n>`, like OpenMW. They are created with `createCopy`
 during play, so MWSE writes them to the save.
+
+## Sound gate (0.4.1)
+
+OpenMW never plays the own loop of a light whose record is off by default (`mwclass/light.cpp`
+`insertObject`), and removed objects make no sound. Morrowind plays a light's own sound whatever
+the flag says. The off copies that Leave The Lights Off and No Fires in Bad Weather place
+(`createRecordDraft{ template = torch, isOffByDefault = true }`) therefore kept crackling, and the
+engine restarted those loops over and over because it reported them as not playing (mwsoundguard
+logged them as runaway loops on 2026-11-26). `tes3light.sound` is read-only in MWSE, so the copy
+cannot simply lose its sound. An `addSound` handler (priority 1000, before mwsoundguard) blocks:
+
+- any sound on a reference omwcompat removed (an R1 tombstone);
+- the record's own sound on a light whose record omwcompat generated (`Generated:0x..`) and that is
+  off by default.
+
+Other mods' lights and vanilla records are never touched. The first block of each kind is logged
+once (`[omwcompat] sound gate: kept ... from playing`); later ones are counted in
+`omwcompat.soundGate` (`removed`, `offCopy`).
+
+## MENU scripts (0.4.1)
+
+When the mod's spec has `probeSettings` (omw2mwse sets it when the mod declares settings), a MENU
+script is run once at `modConfigReady` by the settings probe, so its `I.Settings` pages and groups
+reach the MCM. That is all most MENU scripts do, so there is no "not hosted" warning any more. If
+the script returns engine or event handlers, one warning names them: those are not run. Without
+`probeSettings` a MENU script is still skipped with the warning.
+
+Custom settings renderers draw OpenMW UI, which the MCM cannot run. Since 0.4.1 a setting whose
+value is a flat table of numbers and/or booleans (ThievesPickpocket's `tpMultiNumber` and
+`tpMultiSelect`) gets one MCM control per key: sliders using the renderer argument's per-key
+`min`/`max`/`integer`, on/off buttons for booleans, labels from `aliases`. Changing one key writes
+the whole table back. Other custom renderers keep the fallback control and its warning.
 
 ## Activation dispatch
 

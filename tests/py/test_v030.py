@@ -32,10 +32,10 @@ def make_mod(root: Path, files: dict, omwscripts: str) -> None:
 class Versions(unittest.TestCase):
     def test_versions(self):
         self.assertEqual(omw2mwse.__version__, "0.3.1")
-        self.assertEqual(MANIFEST["version"], "0.4.0")
-        self.assertEqual(B.runtime_version(), "0.4.0")
+        self.assertEqual(MANIFEST["version"], "0.4.1")
+        self.assertEqual(B.runtime_version(), "0.4.1")
         rt = (ROOT / "runtime/MWSE/lib/omwcompat/runtime.lua").read_text(encoding="utf-8")
-        self.assertIn('VERSION = "0.4.0"', rt)
+        self.assertIn('VERSION = "0.4.1"', rt)
 
 
 class RuntimeLineEnds(unittest.TestCase):

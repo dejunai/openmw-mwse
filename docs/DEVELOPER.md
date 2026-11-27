@@ -150,6 +150,21 @@ bin/omw2mwse scan path/to/mod --no-openmw             # scan without the catalog
   skills), `tests/py/test_v030.py`. `tests/run_lua_tests.sh` rebuilds the git-ignored test
   staging `staging/LeaveTheLightsOff` whenever `runtime/` changed.
 
+## omwcompat 0.4.1: silent off lights, MENU settings, table-valued renderers
+
+- **Sound gate.** `runtime.lua` `RT.onAddSound` / `soundBlockReason` / `RT.soundGate` (registered
+  on `addSound` at priority 1000 in `wire()`); `objects.lua` `silence(ref)` (called by `remove()`
+  and the `enabled = false` setter), `isGeneratedId`, and `_removedRecordId` (a removed object
+  keeps its `recordId`). See [RUNTIME.md](RUNTIME.md#sound-gate-041).
+- **MENU scripts.** `RT.register` puts MENU scripts of a `probeSettings` mod in
+  `m.menuSettingsOnly`; the probe in `instantiate` warns once if such a script returns handlers.
+- **Table-valued renderers.** `settings.lua` `isRecordValue`, `recordKeys`, the `record` branch
+  of `addSetting`; `registerRenderer` only records the name now (`M.customRenderers`).
+- **Tests.** `tests/lua/test_v041.lua`: the swap pattern with a mock engine that plays light loops
+  like Morrowind (`mock.engineSounds`, `W.loops`, `W.notPlayingQuirk`), a control run with the
+  0.4.0 behaviour that reproduces the runaway, then the fixed run; the original No Fires in Bad
+  Weather and ThievesPickpocket settings when the untracked corpus is present.
+
 ## Further reading
 
 - [RUNTIME.md](RUNTIME.md): how the emulation works, local scripts, object-lifecycle rules.

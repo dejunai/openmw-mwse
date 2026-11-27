@@ -1,7 +1,9 @@
 -- omwcompat.settings: OpenMW settings (I.Settings + openmw.storage) on MWSE.
 --   * registerPage / registerGroup with renderers checkbox, number, select, textLine,
 --     color (hex text), inputBinding (shown, not editable), custom renderers (fallback
---     by default value type)
+--     by default value type; 0.4.1: a default that is a flat table of numbers and/or
+--     booleans, like ThievesPickpocket's tpMultiNumber / tpMultiSelect, gets one MCM
+--     control per key, using argument.keys / aliases / min / max / integer)
 --   * storage sections: settings groups are backed by mwse.loadConfig/saveConfig
 --     (Data Files/MWSE/config/omwcompat_<Mod>.json); other sections live in the save
 --   * subscribers fire (next frame) on every set, including changes made in the MCM
@@ -198,6 +200,35 @@ end
 ---------------------------------------------------------------- registration
 local KNOWN = { checkbox = "full", number = "full", select = "full", textLine = "full",
     color = "partial", inputBinding = "fallback" }
+
+-- a custom renderer's value that the MCM can still edit key by key: { KEY = number|boolean, ... }
+local function isRecordValue(d)
+    if type(d) ~= "table" or getmetatable(d) ~= nil then return false end
+    local n = 0
+    for k, v in pairs(d) do
+        if type(k) ~= "string" then return false end
+        local t = type(v)
+        if t ~= "number" and t ~= "boolean" then return false end
+        n = n + 1
+    end
+    return n > 0
+end
+M.isRecordValue = isRecordValue
+local function perKey(v, k) if type(v) == "table" then return v[k] end return v end
+local function recordKeys(s)
+    local d, arg, keys, seen = s.default, s.argument or {}, {}, {}
+    if type(arg.keys) == "table" then
+        for _, k in ipairs(arg.keys) do
+            if d[k] ~= nil and not seen[k] then keys[#keys + 1] = k; seen[k] = true end
+        end
+    end
+    local rest = {}
+    for k in pairs(d) do if not seen[k] then rest[#rest + 1] = k end end
+    table.sort(rest)
+    for _, k in ipairs(rest) do keys[#keys + 1] = k end
+    return keys
+end
+M.recordKeys = recordKeys
 M.KNOWN_RENDERERS = KNOWN
 
 function M.registerPage(m, page)
@@ -223,7 +254,7 @@ function M.registerGroup(m, group, scriptFlags)
             items = arg.items, itemsL10n = arg.l10n,
             mcmNote = s.mcmNote,
         }
-        if not KNOWN[s.renderer or "textLine"] then
+        if not KNOWN[s.renderer or "textLine"] and not isRecordValue(s.default) then
             rt.warnOnce("renderer " .. tostring(s.renderer), "settings: custom renderer '%s' (%s.%s) shown with a fallback control",
                 tostring(s.renderer), group.key, tostring(s.key))
         end
@@ -248,8 +279,9 @@ function M.interface(m, S)
         version = 1,
         registerPage = function(p) M.registerPage(m, p) end,
         registerGroup = function(g) M.registerGroup(m, g, S and S.flags) end,
-        registerRenderer = function(name) rt.warnOnce("registerRenderer " .. tostring(name),
-            "settings: custom renderer '%s' registered by %s; the MCM uses a fallback control", tostring(name), m.name) end,
+        -- custom renderers draw OpenMW UI, which the MCM cannot run; the settings that use one
+        -- are shown per key (table values) or with a fallback control, warned in registerGroup
+        registerRenderer = function(name) M.customRenderers[tostring(name)] = m.name end,
         updateRendererArgument = M.updateRendererArgument,
         getGroup = function(k) return registry.groups[k] end,
         getPage = function(k) return registry.pages[k] end,
@@ -257,8 +289,19 @@ function M.interface(m, S)
 end
 
 ---------------------------------------------------------------- MCM generation
+M.customRenderers = {}   -- renderer name -> mod that registered it
+
+local function fmtValue(d)
+    if type(d) == "boolean" then return d and "on" or "off" end
+    return tostring(d)
+end
 local function fmtDefault(s)
     local d = s.default
+    if isRecordValue(d) then
+        local parts = {}
+        for _, k in ipairs(recordKeys(s)) do parts[#parts + 1] = tostring(k) .. " " .. fmtValue(d[k]) end
+        return table.concat(parts, ", ")
+    end
     if type(d) == "boolean" then return d and "on" or "off" end
     if util.typeOf(d) == "Color" then return "#" .. d:asHex() end
     return tostring(d)
@@ -283,6 +326,55 @@ local function addSetting(container, g, s, L)
     end
     local r = s.renderer
     local kind = r
+    if not KNOWN[r] and isRecordValue(s.default) then
+        -- one control per key of the table value; changing one writes the whole table back
+        local arg = s.argument or {}
+        local cat = container:createCategory({ label = label, description = withDefault(note) })
+        for _, k in ipairs(recordKeys(s)) do
+            local dk = s.default[k]
+            local alias = type(arg.aliases) == "table" and arg.aliases[k] or nil
+            local klabel = alias ~= nil and L(tostring(alias)) or tostring(k)
+            local kdesc = (desc ~= "" and (desc .. "\n\n") or "") .. "Default: " .. fmtValue(dk)
+            local function get()
+                local v = sec:get(s.key)
+                if type(v) == "table" and v[k] ~= nil then return v[k] end
+                return dk
+            end
+            local function put(x)
+                local cur = sec:getCopy(s.key)
+                local t = {}
+                for a, b in pairs(s.default) do t[a] = b end
+                if type(cur) == "table" then for a, b in pairs(cur) do t[a] = b end end
+                t[k] = x
+                sec:set(s.key, t)
+            end
+            if type(dk) == "boolean" then
+                cat:createOnOffButton({ label = klabel, description = kdesc, variable = mwse.mcm.createCustom({
+                    getter = get, setter = function(_, v) put(v and true or false) end }) })
+            else
+                local lo, hi = tonumber(perKey(arg.min, k)), tonumber(perKey(arg.max, k))
+                local integer = perKey(arg.integer, k) == true
+                local function conv(v)
+                    v = tonumber(v)
+                    if v == nil then return get() end
+                    if integer then v = math.floor(v + 0.5) end
+                    if lo and v < lo then v = lo end
+                    if hi and v > hi then v = hi end
+                    return v
+                end
+                local variable = mwse.mcm.createCustom({ getter = get, setter = function(_, v) put(conv(v)) end,
+                    numbersOnly = not (lo and hi) or nil })
+                if lo and hi then
+                    cat:createSlider({ label = klabel, description = kdesc, min = lo, max = hi,
+                        step = integer and 1 or (hi - lo) / 100, jump = integer and math.max(1, math.floor((hi - lo) / 10)) or (hi - lo) / 10,
+                        decimalPlaces = integer and 0 or 2, variable = variable })
+                else
+                    cat:createTextField({ label = klabel, description = kdesc, numbersOnly = true, variable = variable })
+                end
+            end
+        end
+        return "record"
+    end
     if not KNOWN[r] then
         local t = type(s.default)
         kind = (t == "boolean" and "checkbox") or (t == "number" and "number") or (t == "string" and "textLine")

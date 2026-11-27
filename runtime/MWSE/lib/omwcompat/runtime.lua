@@ -13,7 +13,7 @@ local timing = require("omwcompat.timing")
 local guards = require("omwcompat.guards")
 local player = require("omwcompat.player")
 
-local RT = { VERSION = "0.4.0", API_REVISION = 70, PROBE_API_REVISION = 100 }
+local RT = { VERSION = "0.4.1", API_REVISION = 70, PROBE_API_REVISION = 100 }
 local LOCAL_FLAG_NAMES
 objects.init(RT)
 settings.init(RT)
@@ -790,8 +790,19 @@ local function instantiate(m, spec, probe, selfRef)
     if not f then reportError("load " .. spec.path, err); return nil end
     setfenv(f, makeEnv(m, S))
     if probe then
-        local ok, err = pcall(f)
-        if not ok then RT.warn("settings probe of %s stopped early: %s", spec.path, tostring(err)) end
+        local ok, ret = pcall(f)
+        if not ok then RT.warn("settings probe of %s stopped early: %s", spec.path, tostring(ret)); return nil end
+        if m.menuSettingsOnly and m.menuSettingsOnly[RT.normPath(spec.path)] and type(ret) == "table" then
+            local names = {}
+            for _, k in ipairs({ "engineHandlers", "eventHandlers" }) do
+                if type(ret[k]) == "table" then for h in pairs(ret[k]) do names[#names + 1] = tostring(h) end end
+            end
+            table.sort(names)
+            if #names > 0 then
+                RT.warnOnce("menu " .. m.name .. spec.path, "%s: MENU script %s: its settings are in the MCM; its menu handlers (%s) are not run",
+                    m.name, spec.path, table.concat(names, ", "))
+            end
+        end
         return nil
     end
     local ok, ret = safecall("run " .. spec.path, f)
@@ -1248,6 +1259,47 @@ function RT.objectBecameActive(w)
     local ref = objects.refOf(w)
     if ref then RT.queueActive(ref) end
 end
+-- Sound gate (0.4.1). OpenMW never plays the loop of a light whose record is "off by
+-- default" (mwclass/light.cpp insertObject), and a removed object makes no sound. Morrowind
+-- plays a light's own sound whatever the flag says and keeps it on disabled references, so
+-- the off copies that LTLO / No Fires in Bad Weather place (createRecordDraft{ isOffByDefault
+-- = true } of a torch) kept crackling, and the engine kept restarting those loops because it
+-- reported them as not playing. Blocked here, before other addSound handlers:
+--   removed : any sound on a reference omwcompat removed (R1 tombstone)
+--   offCopy : the record's own sound on a light omwcompat created ("Generated:0x..") that is
+--             off by default. Other mods' lights and vanilla records are never touched.
+RT.soundGate = { enabled = true, removed = 0, offCopy = 0 }
+local LIGHT_OT
+local function soundBlockReason(ref, snd)
+    if objects.isTomb(ref) then return "removed" end
+    local obj = ref.object
+    LIGHT_OT = LIGHT_OT or tes3.objectType.light
+    if not obj or obj.objectType ~= LIGHT_OT or not obj.isOffByDefault then return nil end
+    local own = obj.sound
+    if not own or not snd then return nil end
+    if snd ~= own and tostring(snd.id):lower() ~= tostring(own.id):lower() then return nil end
+    if not objects.isGeneratedId(obj.id) then return nil end
+    return "offCopy"
+end
+RT.soundBlockReason = soundBlockReason
+function RT.onAddSound(e)
+    local g = RT.soundGate
+    if not g.enabled or e.block or e.isVoiceover then return end
+    local ref = e.reference
+    if not ref then return end
+    local ok, why = pcall(soundBlockReason, ref, e.sound)
+    if not ok or not why then return end
+    e.block = true
+    g[why] = g[why] + 1
+    if g[why] == 1 then
+        local sid = e.sound and e.sound.id or "?"
+        local oid = ref.object and ref.object.id or "?"
+        mwse.log("[omwcompat] sound gate: kept %s from playing on %s (%s), as OpenMW does; further cases are counted, not logged",
+            tostring(sid), tostring(oid), why == "removed" and "an object a script removed" or "a light that is off by default")
+    end
+    return false
+end
+
 local function flushActive()
     if #state.activeQueue == 0 then return end
     local q = state.activeQueue
@@ -1576,6 +1628,7 @@ local function wire()
         event.register(tes3.event.referenceDeactivated, function(e) RT.onReferenceDeactivated(e.reference) end)
     end
     event.register(tes3.event.modConfigReady, RT.onModConfigReady)
+    if tes3.event.addSound then event.register(tes3.event.addSound, RT.onAddSound, { priority = 1000 }) end
     event.register(tes3.event.keyDown, function(e) RT.onKey(e, "onKeyPress") end)
     event.register(tes3.event.keyUp, function(e) RT.onKey(e, "onKeyRelease") end)
     event.register(tes3.event.journal, RT.onJournal)
@@ -1614,6 +1667,12 @@ function RT.register(spec)
                 m.customSpecs[normPath(sp.path)] = cs
                 customByPath[normPath(sp.path)] = { m = m, spec = cs }
             elseif LOCAL_FLAGS[f] then lflags[#lflags + 1] = f
+            elseif f == "MENU" and spec.probeSettings then
+                -- 0.4.1: a MENU script is run once at modConfigReady to collect its I.Settings
+                -- pages and groups for the MCM (the settings probe). That is all most MENU
+                -- scripts do; menu handlers it returns are reported by the probe.
+                m.menuSettingsOnly = m.menuSettingsOnly or {}
+                m.menuSettingsOnly[normPath(sp.path)] = true
             else skipped[#skipped + 1] = f end
         end
         if isGlobal then m.globalSpecs[#m.globalSpecs + 1] = sp end

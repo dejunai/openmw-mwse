@@ -213,7 +213,7 @@ function M.install(opts)
 
     local ev = {}
     for _, n in ipairs({ "initialized", "loaded", "save", "enterFrame", "activate", "referenceActivated", "referenceDeactivated",
-        "cellChanged", "simulate", "modConfigReady", "load", "keyDown", "keyUp", "journal" }) do ev[n] = n end
+        "cellChanged", "simulate", "modConfigReady", "load", "keyDown", "keyUp", "journal", "addSound" }) do ev[n] = n end
     _G.tes3 = {
         objectType = OT,
         weather = { clear = 0, cloudy = 1, foggy = 2, overcast = 3, rain = 4, thunder = 5, ash = 6, blight = 7, snow = 8, blizzard = 9 },
@@ -295,7 +295,33 @@ function M.install(opts)
             pitch = p.pitch, loop = p.loop }
         return true
     end
-    tes3.removeSound = function(p) W.sounds[#W.sounds + 1] = { op = "remove", sound = p.sound, ref = p.reference } end
+    tes3.removeSound = function(p)
+        W.sounds[#W.sounds + 1] = { op = "remove", sound = p.sound, ref = p.reference }
+        if p.reference and (p.sound == nil or (W.loops[p.reference] and p.reference.object.sound == p.sound)) then
+            W.loops[p.reference] = nil
+        end
+    end
+    -- engine light sounds (0.4.1 tests). Like Morrowind: a light reference in the active cell
+    -- plays its record's own loop whatever isOffByDefault says, a disabled reference starts
+    -- nothing new but keeps a loop that is already playing, and only tes3.removeSound stops it.
+    -- W.notPlayingQuirk: like the in-game runaway (mwsoundguard: "engine says playing: no"),
+    -- loops on off-by-default lights are reported as not playing, so every engine pass starts
+    -- them again.
+    W.loops, W.loopStarts = {}, {}
+    function M.engineSounds(passes)
+        for _ = 1, passes or 1 do
+            for _, r in ipairs(W.activeCell and W.activeCell._refs or {}) do
+                local o = r.object
+                if not r._gone and not r.disabled and o.objectType == OT.light and o.sound and not W.loops[r] then
+                    local e = { reference = r, sound = o.sound, flags = 1, volume = 250, pitch = 1, isVoiceover = false }
+                    if M.fire("addSound", e) ~= false and not e.block then
+                        W.loopStarts[r] = (W.loopStarts[r] or 0) + 1
+                        if not (W.notPlayingQuirk and o.isOffByDefault) then W.loops[r] = true end
+                    end
+                end
+            end
+        end
+    end
     tes3.getSoundPlaying = function(p)
         for i = #W.sounds, 1, -1 do
             local x = W.sounds[i]
