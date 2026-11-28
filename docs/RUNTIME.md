@@ -1,7 +1,7 @@
 # omwcompat runtime
 
 omwcompat is an MWSE Lua library at `Data Files/MWSE/lib/omwcompat.lua` plus `omwcompat/`.
-It runs OpenMW GLOBAL, object-attached, CUSTOM and PLAYER scripts unmodified. Version 0.4.4.
+It runs OpenMW GLOBAL, object-attached, CUSTOM and PLAYER scripts unmodified. Version 0.4.5.
 
 ## Layout
 
@@ -16,6 +16,7 @@ It runs OpenMW GLOBAL, object-attached, CUSTOM and PLAYER scripts unmodified. Ve
 | `omwcompat/player.lua` | PLAYER-script modules `openmw.ui` (showMessage), `openmw.ambient`, `openmw.input`, `core.sound`, key events (0.4.0). |
 | `omwcompat/guards.lua` | Rule-based guards `activeDedupe` / `safeIteration` (0.3.2). |
 | `omwcompat/timing.lua` | Per-script handler timing counters (0.3.2). |
+| `omwcompat/diag.lua` | Read-only inspection and probe hooks for the optional smoke test mod (0.4.5). See [SMOKETEST.md](SMOKETEST.md). |
 | `omwcompat/manifest.json` | Support status of each symbol. The `omw2mwse scan` command reads it. |
 
 A packaged mod adds `MWSE/mods/mwsuite/openmw/<Mod>/main.lua`, which calls:

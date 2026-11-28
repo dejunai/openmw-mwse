@@ -13,7 +13,7 @@ local timing = require("omwcompat.timing")
 local guards = require("omwcompat.guards")
 local player = require("omwcompat.player")
 
-local RT = { VERSION = "0.4.4", API_REVISION = 70, PROBE_API_REVISION = 100 }
+local RT = { VERSION = "0.4.5", API_REVISION = 70, PROBE_API_REVISION = 100 }
 local LOCAL_FLAG_NAMES
 objects.init(RT)
 settings.init(RT)
@@ -67,6 +67,7 @@ RT.LOG_PATH = "Data Files/MWSE/logs/omwcompat.log"
 RT.LOG_PREV = "Data Files/MWSE/logs/omwcompat.log.prev"
 
 local warned = {}
+local capture            -- a list while omwcompat.diag.capture runs a probe: library-log lines go here instead
 local errCount = timing.errors   -- where -> count; shared with timing snapshots
 local logFile, logOpened, logFallback, logOpenError
 local announced = false
@@ -124,6 +125,7 @@ function RT.openLibraryLog()
 end
 
 local function writeLib(line)
+    if capture then capture[#capture + 1] = line; return end
     if not logOpened then
         local err = RT.openLibraryLog()
         if logFile then
@@ -157,10 +159,13 @@ function RT.warn(fmt, ...)
     writeLib("[omwcompat] WARNING: " .. string.format(fmt, ...))
 end
 function RT.warnOnce(key, fmt, ...)
-    if warned[key] then return end
-    warned[key] = true
+    local seen = capture and capture.seen or warned
+    if seen[key] then return end
+    seen[key] = true
     RT.warn(fmt, ...)
 end
+-- diag.capture only (diagnostics, see diag.lua): route library-log lines into `list`, or back to the file with nil
+function RT._setCapture(list) local prev = capture; capture = list; return prev end
 function RT.logFallback() return logFallback end
 function RT.logOpenError() return logOpenError end
 
@@ -1850,5 +1855,8 @@ RT.settings = settings
 RT.objects = objects
 RT.util = util
 RT.serial = serial
+-- Read-only inspection and probe hooks for the optional omwcompat_smoketest mod (diag.lua).
+RT.diag = require("omwcompat.diag").install(RT, { mods = mods, state = state, actors = actors, settings = settings,
+    serial = serial, timing = timing, objects = objects, errCount = errCount, loadHosted = loadHosted })
 announce()
 return RT

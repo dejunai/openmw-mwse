@@ -82,7 +82,7 @@ Anything else is an internal error. Python 3.9+ (`requiresPython`).
  "verdict": "ready",
  "blockers": [],
  "guards": ["activeDedupe", "safeIteration"],
- "runtime_version": "0.4.4",
+ "runtime_version": "0.4.5",
  "written_files": ["MWSE/lib/omwcompat.lua", "MWSE/lib/omwcompat/runtime.lua",
                    "MWSE/mods/mwsuite/openmw/M/main.lua",
                    "MWSE/mods/mwsuite/openmw/M/omw2mwse-manifest.json"],
