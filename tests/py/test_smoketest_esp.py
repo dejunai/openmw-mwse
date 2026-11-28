@@ -1,6 +1,7 @@
 """omwcompat_smoketest: the dev-only fixture plugin's JSON source. It is an interior that behaves like an
 exterior, carries only what the MWSE mod needs, matches the ids the Lua side uses, and (when tes3conv is
 available) builds reproducibly. stdlib unittest; Python 3.9+. Written for omwcompat by dej (dejunai)."""
+import copy
 import importlib.util
 import json
 import os
@@ -103,6 +104,68 @@ class SmokeEspBuild(unittest.TestCase):
             esp = Path(td) / b.ESP_NAME
             self.assertTrue(esp.is_file())
             self.assertEqual(esp.read_bytes()[:4], b"TES3")
+
+
+# Names the Construction Set truncated (FNAM is 32 bytes including NUL).
+OLD_OVERLONG_FNAM = {
+    "omwc_lever_respawn": "Smoke test: respawn the fixtures",
+    "omwc_lever_time_preset": "Smoke test: time to next 06:00 / 12:00 / 18:00 / 00:00",
+    "omwc_smoke_exit": "Smoke test: back to where you were",
+}
+
+
+class SmokeEspLimits(unittest.TestCase):
+    """Fixed-size TES3 fields must fit the Construction Set buffers or the build fails."""
+
+    def test_source_fields_fit(self):
+        b = load_builder()
+        self.assertEqual(b.validate(json.loads(JSON_PATH.read_text(encoding="utf-8"))), [])
+
+    def test_old_overlong_activator_names_are_rejected(self):
+        b = load_builder()
+        recs = json.loads(JSON_PATH.read_text(encoding="utf-8"))
+        by_id = {r["id"]: r for r in recs if "id" in r}
+        for i, name in OLD_OVERLONG_FNAM.items():
+            by_id[i]["name"] = name
+        msgs = b.validate(recs)
+        self.assertEqual(len(msgs), 3, msgs)
+        for i in OLD_OVERLONG_FNAM:
+            self.assertTrue(any(i in m and "FNAM" in m for m in msgs), (i, msgs))
+
+    def test_validator_rejects_fixed_size_overflows(self):
+        b = load_builder()
+        src = json.loads(JSON_PATH.read_text(encoding="utf-8"))
+
+        recs = copy.deepcopy(src)
+        act = next(r for r in recs if r.get("id") == "omwc_lever_respawn")
+        act["name"] = "x" * 32
+        msgs = b.validate(recs)
+        self.assertTrue(any("FNAM" in m and "33 bytes" in m for m in msgs), msgs)
+        act["name"] = "x" * 31
+        self.assertEqual(b.validate(recs), [])
+
+        recs = copy.deepcopy(src)
+        act = next(r for r in recs if r.get("id") == "omwc_lever_respawn")
+        act["id"] = "y" * 32
+        msgs = b.validate(recs)
+        self.assertTrue(any(" id:" in m and "33 bytes" in m for m in msgs), msgs)
+        act["id"] = "y" * 31
+        self.assertEqual(b.validate(recs), [])
+
+        recs = copy.deepcopy(src)
+        cell = next(r for r in recs if r["type"] == "Cell")
+        cell["name"] = "z" * 64
+        msgs = b.validate(recs)
+        self.assertTrue(any("Cell" in m and "65 bytes" in m for m in msgs), msgs)
+        cell["name"] = "z" * 63
+        self.assertEqual(b.validate(recs), [])
+
+        recs = copy.deepcopy(src)
+        recs[0]["author"] = "a" * 32
+        msgs = b.validate(recs)
+        self.assertTrue(any("author" in m and "33 bytes" in m for m in msgs), msgs)
+        recs[0]["author"] = "a" * 31
+        self.assertEqual(b.validate(recs), [])
 
 
 if __name__ == "__main__":

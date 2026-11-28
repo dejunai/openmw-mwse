@@ -69,7 +69,7 @@ object records, cell references and configs around a run and compares them.
 ## Sample report
 
 ```
-2026-11-27 17:40:01  [smoketest 0.1.0] ===== begin (trigger: load, cell: Seyda Neen, game hour: 12.0) =====
+2026-11-27 17:40:01  [smoketest 0.1.1] ===== begin (trigger: load, cell: Seyda Neen, game hour: 12.0) =====
 2026-11-27 17:40:01  [smoketest] PASS runtime: omwcompat 0.5.0 - loaded
 2026-11-27 17:40:01  [smoketest] PASS runtime: library log - writing to Data Files/MWSE/logs/omwcompat.log
 2026-11-27 17:40:01  [smoketest] PASS runtime: save loaded - 2560 frame(s) seen by omwcompat; waited 1200 unpaused frames / 20 s after the load
@@ -90,7 +90,7 @@ object records, cell references and configs around a run and compares them.
 2026-11-27 17:40:01  [smoketest] PASS LeaveTheLightsOff: light scheduling - day, hour 12.0, weather Clear: 0 whitelisted lit, 2 off copies
 2026-11-27 17:40:01  [smoketest] SKIP Thieves Pickpocket: object scripts - no matching object is active in this area
 2026-11-27 17:40:01  [smoketest] FAIL Wildlife Attacks NPCs Too: handler errors - scripts/wildlife.lua onUpdate x3
-2026-11-27 17:40:01  [smoketest 0.1.0] ===== end: 41 PASS, 1 FAIL, 1 SKIP =====
+2026-11-27 17:40:01  [smoketest 0.1.1] ===== end: 41 PASS, 1 FAIL, 1 SKIP =====
 ```
 
 (The sample is the real format; the lines for other mods are illustrative. The real LTLO lines come
@@ -122,9 +122,11 @@ robe and shield base records. In the cell, while the mod is **enabled**, the mod
 | vanilla `rat`, next to the thief | Wildlife Attacks NPCs Too |
 | a robe and a shield on the floor | Mage Robes, Shield Unequipper |
 
-Levers (activate with the normal key): **+1 hour**, **next 06:00 / 12:00 / 18:00 / 00:00**, **next
-weather**, **previous weather** (all ten, Clear to Blizzard, switched immediately), **respawn the
-fixtures**. The exit door takes you back.
+Levers (activate with the normal key): **+1 hour** (`Smoke test: time +1 hour`), **next 06:00 /
+12:00 / 18:00 / 00:00** (`Smoke: skip to 06:00`), **next weather**, **previous weather** (all ten,
+Clear to Blizzard, switched immediately), **respawn the fixtures** (`Smoke: respawn fixture`). The
+exit door (`Smoke: return`) takes you back. Those in-game names stay within Morrowind's 31-character
+FNAM limit (32 bytes including the NUL).
 
 Nothing spawned stays in a save: the fixtures (and anything else a conversion or you put in the cell
 that is not from the plugin, such as LTLO's off copies) are removed when you leave the cell, while
@@ -147,8 +149,10 @@ the floor mesh looks. The first in-game run should confirm those.
 `scripts/build-smoketest-esp.py [--out DIR] [--tes3conv EXE | --conflict-tools DIR] [--check]`
 
 tes3conv is looked up in `--tes3conv`, `$TES3CONV`, a conflict-tools checkout (`tools\tes3conv\tes3conv.exe`,
-v0.4.1), then PATH. The build is reproducible: same JSON and tes3conv, same bytes
-(`sha256 c3eaf31b1b009787a8aab09b76ac87add2c9ac5c77992cf105082dc1069b65fd`, 3256 bytes, built with the Linux
+v0.4.1), then PATH. The build checks every fixed-size TES3 field first (FNAM and record ids: 32 bytes including
+the NUL, so 31 characters; cell names: 64 including NUL) and fails on overflow, so the Construction Set cannot
+silently truncate a name. It is reproducible: same JSON and tes3conv, same bytes
+(`sha256 3ebea90d8502a5d55a8fd612f847303f21546a8e80c7cd1dbd72123fb17f2420`, 3191 bytes, built with the Linux
 tes3conv 0.4.1; the Windows build should match, `--check` verifies reproducibility and a round trip on whichever
 build you use). Edit the JSON, not the .esp.
 
