@@ -242,6 +242,21 @@ bin/omw2mwse scan path/to/mod --no-openmw             # scan without the catalog
   `test_v042.lua` / `test_v043.lua` were updated for the new semantics: handler registration
   is no longer a no-op, and `yawChange` on an NPC is applied.
 
+## omwcompat 0.5.0 (first written as 0.4.5 on smoke-test): diagnostics hooks and the smoke test mod
+
+- **Why.** An optional in-game self check (`omwcompat_smoketest`) needs to look inside the runtime
+  without changing it. See [SMOKETEST.md](SMOKETEST.md).
+- **Where.** `omwcompat/diag.lua` (`RT.diag`): `inspect`, `compileCheck`, `readSettings`, `capture`,
+  `probeStubs`, `roundTrips`, `payloadCheck`; `runtime.lua` has a capture list in `writeLib` /
+  `warnOnce` and `RT._setCapture`. Probes must never leave state behind: `capture` restores error
+  counts, sound gate counters and `actors.animCalls`.
+- **Mod.** `smoketest/MWSE/mods/mwsuite/openmw/omwcompat_smoketest/` (`checks.lua` pure checks,
+  `runner.lua` report writer, `fixtures.lua` dev test cell, `main.lua` events and MCM).
+- **Plugin.** `smoketest/esp/omwc_smoketest.esp.json` -> `scripts/build-smoketest-esp.py` (tes3conv).
+- **Tests.** `tests/lua/test_smoketest.lua`, `tests/py/test_smoketest_esp.py`; the mock gained
+  `event.unregister/isRegistered`, `createKeyBinder`, `createTableVariable`, `tes3.getPlayerCell`
+  and the `saved` event.
+
 ## Further reading
 
 - [RUNTIME.md](RUNTIME.md): how the emulation works, local scripts, object-lifecycle rules.

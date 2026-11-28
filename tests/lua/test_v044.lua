@@ -90,9 +90,9 @@ check(errN == 5, "5 error lines, later ones only counted (" .. errN .. ")")
 
 section("RT.note (generated main.lua hook) and fallback")
 local before = #W.logs
-rt.note("[omwcompat %s] SomeMod was built for omwcompat %s (loaded %s)", "0.4.4", "0.4.0", "0.4.4")
+rt.note("[omwcompat %s] SomeMod was built for omwcompat %s (loaded %s)", "0.4.5", "0.4.0", "0.4.5")
 check(#W.logs == before, "RT.note does not write to MWSE.log")
-check(countLib("[omwcompat 0.4.4] SomeMod was built for omwcompat 0.4.0 (loaded 0.4.4)") == 1,
+check(countLib("[omwcompat 0.4.5] SomeMod was built for omwcompat 0.4.0 (loaded 0.4.5)") == 1,
     "RT.note wrote the BUILT_FOR line to the library log")
 
 local origMkdir = lfs.mkdir
