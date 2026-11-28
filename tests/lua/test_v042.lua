@@ -1,4 +1,5 @@
--- omwcompat 0.4.2: animations degrade quietly. openmw.animation and I.AnimationController
+-- omwcompat 0.4.2: animations degrade quietly (0.5.0: the mock actors here have no
+-- animationData, so even the calls 0.5.0 maps still answer "not playing"; see test_v050.lua). openmw.animation and I.AnimationController
 -- exist, every call is a no-op that answers "not playing", the first call of each mod is
 -- logged once and later ones are counted. Before 0.4.2 require('openmw.animation') raised,
 -- so a script that requires it (Thieves Pickpocket's tpickpocket_local.lua, MWSE.log
@@ -145,9 +146,9 @@ check(last("global") == "6\tnil", "openmw.animation loads in a global script; I.
 check(last("door") == "nil\tfalse", "a door script gets openmw.animation but no I.AnimationController (an actor interface)")
 
 section("warn once per mod, then count")
-check(logsWith("AnimTest: I.AnimationController.addTextKeyHandler does nothing") == 1, "AnimTest: one warning, naming the first call")
+check(logsWith("AnimTest: openmw.animation.isLoopingAnimation does nothing") == 1, "AnimTest: one warning, naming the first unmapped call (0.5.0: handler registration is real, not a no-op)")
 check(logsWith("AnimOther: openmw.animation.playBlended does nothing") == 1, "AnimOther: its own single warning")
-check(logsWith("animations are not ported") == 2, "exactly two animation warnings in all (one per mod)")
+check(logsWith("maps only simple vanilla-group calls") == 2, "exactly two animation warnings in all (one per mod)")
 local c = actors.animCalls.AnimTest
 check(c and c["openmw.animation.someFutureCall"] == 1, "an unknown openmw.animation member is a counted no-op function")
 check(c and c["I.AnimationController.addTextKeyHandler"] == 1 and c["openmw.animation.playQueued"] == 1, "calls are counted per name")
@@ -159,7 +160,7 @@ mock.frames(10, 0.1)
 check(#recs("fallback") == 50, "the 50 fallback timers ran (got " .. #recs("fallback") .. ")")
 check(last("fallback") == "50\t0", "no text-key handler was called")
 check(c["I.AnimationController.playBlendedAnimation"] == 50 and c["openmw.animation.playBlended"] == 50, "50 + 50 play calls counted")
-check(logsWith("animations are not ported") == 2, "still two warnings after 100 more calls (no spam)")
+check(logsWith("maps only simple vanilla-group calls") == 2, "still two warnings after 100 more calls (no spam)")
 check(logsWith("ERROR") == 0, "no runtime errors (" .. tostring(mock.allLogs()[#mock.allLogs()]) .. ")")
 
 section("disposition")
@@ -177,7 +178,7 @@ end
 mock.addMobile(tes3.player, { hp = 100 })
 mock.frames(3, 0.1)
 check(logsWith("ERROR") == 0, "no errors after a save/load")
-check(logsWith("animations are not ported") == 2, "no repeated warning after load")
+check(logsWith("maps only simple vanilla-group calls") == 2, "no repeated warning after load")
 
 -- Thieves Pickpocket 1.5.5 (untracked corpus), when present: the script that failed in game
 section("Thieves Pickpocket tpickpocket_local.lua (corpus), when present")
@@ -214,10 +215,10 @@ else
     local errs, warns = {}, 0
     for _, l in ipairs(mock2.allLogs()) do
         if l:find("ERROR", 1, true) then errs[#errs + 1] = l end
-        if l:find("animations are not ported", 1, true) then warns = warns + 1 end
+        if l:find("maps only simple vanilla-group calls", 1, true) then warns = warns + 1 end
     end
     check(#errs == 0, "tpickpocket_local.lua starts and runs 300 frames without an error (" .. tostring(errs[1]) .. ")")
-    check(warns == 1, "one animation warning for the mod")
+    check(warns == 0, "0.5.0: no animation warning, its load-time addTextKeyHandler is a real registration")
     local tc = require("omwcompat.actors").animCalls.ThievesPickpocket
     check(tc and tc["I.AnimationController.addTextKeyHandler"] == 1, "its load-time addTextKeyHandler was accepted")
 end

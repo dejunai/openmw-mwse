@@ -21,7 +21,7 @@ local function section(s) print("\n== " .. s) end
 local rt = require("omwcompat")
 
 section("path and session start")
-check(rt.VERSION == "0.4.4", "runtime 0.4.4 (" .. rt.VERSION .. ")")
+check(rt.VERSION == "0.5.0", "runtime 0.5.0 (" .. rt.VERSION .. ")")
 check(rt.LOG_PATH == LOG, "LOG_PATH is Data Files/MWSE/logs/omwcompat.log")
 check(rt.LOG_PREV == PREV, "LOG_PREV is omwcompat.log.prev")
 check(not rt.logFallback(), "the library log opened")
@@ -30,10 +30,10 @@ local prevText = prev and prev:read("*a") or ""
 if prev then prev:close() end
 check(prevText:find("previous session line", 1, true) ~= nil, "the previous session was kept as .prev")
 check(#W.logs == 2, "MWSE.log has exactly the two init lines after require (" .. #W.logs .. ")")
-check(W.logs[1] == "[omwcompat 0.4.4] loaded", "banner: " .. tostring(W.logs[1]))
-check(W.logs[2] == "[omwcompat 0.4.4] library log: Data Files/MWSE/logs/omwcompat.log",
+check(W.logs[1] == "[omwcompat 0.5.0] loaded", "banner: " .. tostring(W.logs[1]))
+check(W.logs[2] == "[omwcompat 0.5.0] library log: Data Files/MWSE/logs/omwcompat.log",
     "pointer: " .. tostring(W.logs[2]))
-check(mock.libLogs()[1] == "[omwcompat 0.4.4] session start", "library log starts with a session line")
+check(mock.libLogs()[1] == "[omwcompat 0.5.0] session start", "library log starts with a session line")
 
 section("post-init output stays off MWSE.log")
 local SYN = (os.getenv("TMPDIR_SYNTH") or "/tmp/omwcompat-synth") .. "-v044/"
@@ -90,9 +90,9 @@ check(errN == 5, "5 error lines, later ones only counted (" .. errN .. ")")
 
 section("RT.note (generated main.lua hook) and fallback")
 local before = #W.logs
-rt.note("[omwcompat %s] SomeMod was built for omwcompat %s (loaded %s)", "0.4.4", "0.4.0", "0.4.4")
+rt.note("[omwcompat %s] SomeMod was built for omwcompat %s (loaded %s)", "0.4.5", "0.4.0", "0.4.5")
 check(#W.logs == before, "RT.note does not write to MWSE.log")
-check(countLib("[omwcompat 0.4.4] SomeMod was built for omwcompat 0.4.0 (loaded 0.4.4)") == 1,
+check(countLib("[omwcompat 0.4.5] SomeMod was built for omwcompat 0.4.0 (loaded 0.4.5)") == 1,
     "RT.note wrote the BUILT_FOR line to the library log")
 
 local origMkdir = lfs.mkdir

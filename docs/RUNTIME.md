@@ -1,7 +1,7 @@
 # omwcompat runtime
 
 omwcompat is an MWSE Lua library at `Data Files/MWSE/lib/omwcompat.lua` plus `omwcompat/`.
-It runs OpenMW GLOBAL, object-attached, CUSTOM and PLAYER scripts unmodified. Version 0.4.4.
+It runs OpenMW GLOBAL, object-attached, CUSTOM and PLAYER scripts unmodified. Version 0.5.0.
 
 ## Layout
 
@@ -16,6 +16,7 @@ It runs OpenMW GLOBAL, object-attached, CUSTOM and PLAYER scripts unmodified. Ve
 | `omwcompat/player.lua` | PLAYER-script modules `openmw.ui` (showMessage), `openmw.ambient`, `openmw.input`, `core.sound`, key events (0.4.0). |
 | `omwcompat/guards.lua` | Rule-based guards `activeDedupe` / `safeIteration` (0.3.2). |
 | `omwcompat/timing.lua` | Per-script handler timing counters (0.3.2). |
+| `omwcompat/diag.lua` | Read-only inspection and probe hooks for the optional smoke test mod (0.5.0). See [SMOKETEST.md](SMOKETEST.md). |
 | `omwcompat/manifest.json` | Support status of each symbol. The `omw2mwse scan` command reads it. |
 
 A packaged mod adds `MWSE/mods/mwsuite/openmw/<Mod>/main.lua`, which calls:
@@ -261,7 +262,16 @@ cannot simply lose its sound. An `addSound` handler (priority 1000, before mwsou
 
 Other mods' lights and vanilla records are never touched. The first block of each kind is logged
 once (`[omwcompat] sound gate: kept ... from playing`); later ones are counted in
-`omwcompat.soundGate` (`removed`, `offCopy`).
+`omwcompat.soundGate` (`removed`, `disabled`, `offCopy`, and `oneOff` for blocked non-looping
+sounds).
+
+0.5.0 extends the gate to one-off sounds and disabled lights. `addSound` only carries sounds by id
+(`tes3.playSound{ sound }`, `core.sound.playSound3d`, light loops); sound files, `tes3.say` and
+sound generators come through `addTempSound`, which is now gated too (same priority). A light that
+a converted script disabled (`GameObject.enabled = false`, remembered for the session in
+`objects.isScriptDisabled`) blocks every sound while it stays disabled, as in OpenMW. A light
+disabled by anything else is left alone. The off-copy rule stays `addSound`-only. Voice-over
+(`isVoiceover`) is never blocked.
 
 ## MENU scripts (0.4.1)
 
@@ -277,40 +287,81 @@ value is a flat table of numbers and/or booleans (ThievesPickpocket's `tpMultiNu
 `min`/`max`/`integer`, on/off buttons for booleans, labels from `aliases`. Changing one key writes
 the whole table back. Other custom renderers keep the fallback control and its warning.
 
-## Animations (0.4.2)
+## Animations (0.4.2 stubs, 0.5.0 mapping)
 
-Animations are not ported. So that a mod which plays a gesture or waits for a text key keeps
-running, `require('openmw.animation')` works in every hosted script and actor local scripts have
-`I.AnimationController`; every call is a no-op:
+`require('openmw.animation')` works in every hosted script and actor local scripts have
+`I.AnimationController` (version 1). `PRIORITY`, `BLEND_MASK` and `BONE_GROUP` have OpenMW's
+values. Since 0.5.0 (actors.lua):
 
-- `hasAnimation`, `isPlaying`, `isLoopingAnimation`, `hasGroup`, `hasBone` return `false`;
-  `getCurrentTime`, `getCompletion`, `getLoopCount`, `getSpeed`, `getActiveGroup`,
-  `getTextKeyTime` return `nil` (OpenMW's answers for an animation that is not playing).
-- `playBlended`, `playQueued`, `cancel`, `setSpeed`, `setLoopingEnabled`, `clearAnimationQueue`,
-  `skipAnimationThisFrame`, `addGlow`, `addVfx`, `removeVfx`, `removeAllVfx` do nothing; a name
-  not in this list is a no-op function too.
-- `PRIORITY`, `BLEND_MASK` and `BONE_GROUP` have OpenMW's values.
-- `I.AnimationController` (version 1): `playBlendedAnimation` does nothing; handlers given to
-  `addTextKeyHandler`, `addPlayBlendedAnimationHandler` and `addAnimationEndedHandler` are
-  accepted and never called. Mods that end a gesture on a text key need their own timer
-  fallback (Thieves Pickpocket has one).
+- Group names map to `tes3.animationGroup` by lower-cased name; MWSE's `...HandToHand` movement
+  and idle groups also answer to OpenMW's `...hh` names (`idlehh`, `walkforwardhh`), while
+  `handtohand` and `inventoryhandtohand` keep theirs. Anything else (replacer groups such as
+  `give02` or `search1`) is not a vanilla group.
+- `playBlended` / `playBlendedAnimation`: a vanilla group the actor has
+  (`animationData.animationGroups`), default `start`/`stop` keys -> `tes3.playAnimation`.
+  Priority `Scripted` on an NPC or creature uses `group` (whole body, AI paused). Otherwise the
+  blend mask picks `lower` (LowerBody), `upper` (Torso or RightArm) and `shield` (LeftArm), so the
+  AI keeps control. The player is always layered. `loops` -> `loopCount` (>= 1e6 is infinite).
+  `startFlag` is immediate.
+- `playQueued`: `group`, `loopCount` default infinite, `startFlag` normal, or immediate if
+  `clearAnimationQueue` ran for that actor in the same frame (OpenMW's `PlayGroup ..., 1` recipe).
+- `hasAnimation` (animation data present), `hasGroup`, `isPlaying` (current group of any body
+  section), `getActiveGroup` (LowerBody -> lower, Torso/RightArm -> upper, LeftArm -> shield arm,
+  as an OpenMW name), `getCurrentTime` (`animationData.timings`).
+- `cancel(group)` and `clearAnimationQueue(actor, true)` call `tes3.playAnimation{ group = 0 }`,
+  which hands the actor back to its AI, only for a group omwcompat started.
+  `setLoopingEnabled(false)` on a playing group -> `tes3.cancelAnimationLoop`.
+  `skipAnimationThisFrame` -> `tes3.skipAnimationFrame`.
+- `I.AnimationController`: `playBlendedAnimation` runs the script's
+  playBlendedAnimation handlers (newest first, `false` stops the chain, `options.skip` skips the
+  play), then plays as above. Text key handlers (per group, or `''` for all) get `start` from
+  MWSE's `playGroup` event (registered on the first text key handler, deduplicated per actor,
+  group and frame) and `stop` when a group omwcompat started ends. animationEnded handlers get
+  `(group, { startKey, stopKey, completion = 1 })` then. The end is found by a per-frame poll of
+  `currentAnimGroups` (`actors.animTick`). A play that never shows up within 10 frames is
+  dropped silently. Engine-started animations never reach the play or ended handlers.
 
-The first call of each mod logs one line
-(`<mod>: <call> does nothing: animations are not ported by omwcompat ...`); later calls are
-counted in `omwcompat.actors.animCalls[mod][name]`. The scanner still lists `openmw.animation`
-as unsupported, so verdicts do not change: the mod runs, its animations do not play.
+Still no-ops answering "not playing": `isLoopingAnimation`, `hasBone` (false);
+`getCompletion`, `getTextKeyTime`, `getLoopCount`, `getSpeed` (nil); `setSpeed`, `addGlow`,
+`addVfx`, `removeVfx`, `removeAllVfx`, and any name not listed. Non-vanilla groups, groups the
+actor lacks, custom start/stop keys and an empty blend mask also play nothing. No text keys
+other than `start`/`stop` fire, so mods that wait for `hit`/`attach` need their own timer
+fallback (Thieves Pickpocket has one). Every MWSE call is wrapped: a failure is logged once
+(`MWSE refused tes3.playAnimation ...`) and the call is skipped.
+
+Logging (library log only): the first unmapped call of each mod logs one warning,
+`<mod>: <call> does nothing (<reason>): omwcompat ... maps only simple vanilla-group calls ...`.
+The first mapped play logs one note, `<mod>: <call> is played through MWSE ...`. All calls are
+counted in `omwcompat.actors.animCalls[mod][name]`. Since 0.5.0 the manifest lists
+`openmw.animation` as a partial module (mapped calls partial, no-ops stub, the enums full) and
+`I.AnimationController.*` as partial, so the scanner no longer blocks on them. Members that
+OpenMW does not document (`getBoneTransform`, `play`) and the engine-internal `_onPlayAnimation`
+handlers stay unsupported.
 
 `types.NPC.getDisposition` / `getBaseDisposition` (0.4.2) read the NPC instance's effective /
 base disposition (Morrowind has one per NPC, the player argument is ignored);
 `setBaseDisposition` / `modifyBaseDisposition` write the base value, clamped to 0..100.
 
-## Movement controls (0.4.3)
+## Movement controls (0.4.3, 0.5.0)
 
-`self.controls.sneak`, `run` and `jump` still read the actor's current state. Other fields
-(`yawChange`, `movement`, ...) still read nil. Writes no longer raise: the first write of
-each field logs one line (`self.controls.<name> cannot be set: movement controls are not
-emulated...`); later writes are ignored silently. Thieves Pickpocket's `onInactive` always
-writes `yawChange = 0` in `stopTracking`, and must still run `finishApology` afterwards.
+Reads: `sneak`, `run`, `jump` -> `mobile.isSneaking` / `isRunning` / `isJumping`;
+`movement` / `sideMovement` -> 1, -1 or 0 from `isMovingForward`/`isMovingBack` and
+`isMovingRight`/`isMovingLeft`; `yawChange` / `pitchChange` -> 0 (OpenMW consumes them each
+frame).
+
+Writes (0.5.0), on NPCs and creatures that are not the player:
+
+- `yawChange` -> `reference.facing = wrap(facing + value)`, applied at write time. Positive turns
+  right, matching OpenMW (`rotation:getYaw()` is `orientation.z` in both). Thieves Pickpocket and
+  Vaults Restricted write `angleDifference / 6` every 0.03 s, which converges on the player.
+- `run` / `sneak` -> `mobile.forceRun` / `forceSneak` (tes3mobileNPC only; creatures warn).
+- `jump = true` -> `mobile:doJump()`; `jump = false` does nothing.
+
+Everything else (`pitchChange`, `movement`, `sideMovement`, `use`, unknown fields, any write on
+the player) logs one warning per field (`self.controls.<name> cannot be set (<reason>) ...`) and
+is ignored. Mapped writes log one note per field (`self.controls.<name> is applied as ...`).
+Counts are in `omwcompat.actors.controlWrites`. A write never raises: Thieves Pickpocket's
+`onInactive` writes `yawChange = 0` in `stopTracking` and must still run `finishApology`.
 
 ## Library log (0.4.4)
 

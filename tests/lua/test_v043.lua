@@ -77,9 +77,10 @@ end
 section("writes no longer raise")
 mock.fire("loaded", { newGame = true })
 mock.frames(3, 0.1)
-check(last("active") == "false\tnil", "onActive finished after the writes; sneak is readable, yawChange reads nil (got " .. tostring(last("active")) .. ")")
+check(last("active") == "false\t0", "onActive finished after the writes; sneak is readable, yawChange reads 0 (0.5.0) (got " .. tostring(last("active")) .. ")")
 check(logsWith("cannot be set (controls are read-only") == 0, "the 0.4.0 raise is gone")
-check(logsWith("self.controls.yawChange cannot be set") == 1, "one warning for yawChange")
+check(logsWith("self.controls.yawChange cannot be set") == 0 and logsWith("self.controls.yawChange is applied as a facing change") == 1,
+    "0.5.0: yawChange on an NPC is applied (one note, no warning)")
 check(logsWith("self.controls.movement cannot be set") == 1, "one warning for movement")
 check(logsWith("ERROR") == 0, "no runtime errors after the first writes")
 
@@ -88,7 +89,7 @@ local w = rt.objects.wrap(npc)
 for _ = 1, 50 do w:sendEvent("Face", {}) end
 mock.frames(2, 0.1)
 check(#recs("face") == 50, "50 yawChange writes from events all completed (got " .. #recs("face") .. ")")
-check(logsWith("self.controls.yawChange cannot be set") == 1, "still one yawChange warning after 50 more writes")
+check(logsWith("self.controls.yawChange is applied as a facing change") == 1, "still one yawChange note after 50 more writes")
 mock.fire("referenceDeactivated", { reference = npc })
 mock.frames(2, 0.1)
 check(last("inactive") == "1", "onInactive ran stopTracking and the work after it")
@@ -130,12 +131,12 @@ else
     local errs, yawWarn, animWarn = {}, 0, 0
     for _, l in ipairs(mock2.allLogs()) do
         if l:find("ERROR", 1, true) then errs[#errs + 1] = l end
-        if l:find("self.controls.yawChange cannot be set", 1, true) then yawWarn = yawWarn + 1 end
-        if l:find("animations are not ported", 1, true) then animWarn = animWarn + 1 end
+        if l:find("self.controls.yawChange is applied as a facing change", 1, true) then yawWarn = yawWarn + 1 end
+        if l:find("maps only simple vanilla-group calls", 1, true) then animWarn = animWarn + 1 end
     end
     check(#errs == 0, "tpickpocket_local.lua onInactive no longer errors (" .. tostring(errs[1]) .. ")")
-    check(yawWarn == 1, "one yawChange warning when the NPC is deactivated")
-    check(animWarn == 1, "the 0.4.2 animation warning still fires once")
+    check(yawWarn == 1, "one yawChange note (0.5.0: applied, not ignored) when the NPC is deactivated")
+    check(animWarn == 0, "0.5.0: no animation warning (registering a text key handler is not a no-op any more)")
 end
 
 print(string.format("\n%d passed, %d failed", pass, fail))

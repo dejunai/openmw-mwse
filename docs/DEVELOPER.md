@@ -174,7 +174,7 @@ bin/omw2mwse scan path/to/mod --no-openmw             # scan without the catalog
   `animNote` / `animCalls`; `runtime.lua` `buildModules` adds `openmw.animation` for every script,
   `makeInterfaces` adds `I.AnimationController` for actor scripts. `actors.lua`
   `getDisposition` / `getBaseDisposition` / `setBaseDisposition` / `modifyBaseDisposition`.
-  See [RUNTIME.md](RUNTIME.md#animations-042).
+  See [RUNTIME.md](RUNTIME.md#animations-042-stubs-050-mapping).
 - **Converter.** Unchanged (omw2mwse 0.3.1): `manifest.json` keeps `openmw.animation` in
   `unsupportedModules`, so scanner verdicts and coverage numbers do not move.
 - **Tests.** `tests/lua/test_v042.lua`: every `openmw.animation` / `I.AnimationController` call,
@@ -188,7 +188,7 @@ bin/omw2mwse scan path/to/mod --no-openmw             # scan without the catalog
   `stopTracking` still aborted `onInactive` by writing `self.controls.yawChange = 0`
   (MWSE.log 2026-11-27 04:00:03). `finishApology` and `setAI(true)` never ran.
 - **Where.** `actors.lua` `controlsOf` `__newindex`: warn once, ignore the write. See
-  [RUNTIME.md](RUNTIME.md#movement-controls-043).
+  [RUNTIME.md](RUNTIME.md#movement-controls-043-050).
 - **Converter.** Unchanged (omw2mwse 0.3.1).
 - **Tests.** `tests/lua/test_v043.lua`: writes no longer raise, one warning per field across
   50 more writes, `onInactive` finishes, and the original `tpickpocket_local.lua` deactivates
@@ -211,6 +211,51 @@ bin/omw2mwse scan path/to/mod --no-openmw             # scan without the catalog
   `print()` / warnings / errors staying off MWSE.log, `RT.note`, and fallback to MWSE.log when
   the file cannot be opened. `tests/lua/test_versions.lua` covers the `note` hook and the
   older-runtime fallback.
+
+## omwcompat 0.5.0: ported stubs (sound gate one-offs, animations, controls)
+
+- **Sound gate.** `runtime.lua` `gate(e, temp)` backs `RT.onAddSound` and the new
+  `RT.onAddTempSound` (both priority 1000 in `wire()`); `soundBlockReason(ref, snd, temp)` adds
+  the `disabled` kind via `objects.isScriptDisabled(ref)` (a weak set filled by the
+  `enabled = false` setter, cleared by `enabled = true`). `RT.soundGate` gained `disabled` and
+  `oneOff`. See [RUNTIME.md](RUNTIME.md#sound-gate-041).
+- **Animations.** `actors.lua` animations section: `groupIdOf` / `groupNameOf` (built lazily
+  from `tes3.animationGroup`), `play()` shared by playBlended / playQueued / the interface,
+  `plays[ref]` (weak) polled by `M.animTick()` from `frameWork`, `controllers` (weak; only
+  controllers with text key or ended handlers), `M.onPlayGroup` (registered lazily on the first
+  text key handler). `animationControllerInterface(modName, getSelf, S)` now takes the script.
+  See [RUNTIME.md](RUNTIME.md#animations-042-stubs-050-mapping).
+- **Controls.** `actors.lua` `writeControl` / `controlsOf`; counts in `M.controlWrites`.
+  See [RUNTIME.md](RUNTIME.md#movement-controls-043-050).
+- **Manifest (scanner gate).** The manifest now matches what the runtime handles. A stub is a
+  warning, not a blocker. `openmw.animation` has moved from `unsupportedModules` to `modules`
+  (partial), with every documented member listed (mapped: partial, no-op: stub, enums: full).
+  `openmw.interfaces.AnimationController.*` is partial. `self.controls.yawChange`, `movement`
+  and `sideMovement` are partial (reads work); `pitchChange` and `use` are stub. Notes for the
+  partial report are in `scan.py` `PARTIAL_NOTES`. Re-scanning the 191 survey mods (2026-11
+  survey) leaves 50 fewer mods with an animation or controls blocker (63 -> 13; the rest are
+  engine-internal `_onPlayAnimation` copies and undocumented calls). One more mod is ready:
+  TinkerSnail/pinchito (168 -> 167 blocked). Thieves Pickpocket goes from 20 to 15 blockers,
+  all UI.
+- **Tests.** `tests/lua/test_v050.lua`. The mock gets `addTempSound` / `playGroup`,
+  `tes3.playAnimation`, `animationData` and `facing` there, not in `mock_mwse.lua`.
+  `test_v042.lua` / `test_v043.lua` were updated for the new semantics: handler registration
+  is no longer a no-op, and `yawChange` on an NPC is applied.
+
+## omwcompat 0.5.0 (first written as 0.4.5 on smoke-test): diagnostics hooks and the smoke test mod
+
+- **Why.** An optional in-game self check (`omwcompat_smoketest`) needs to look inside the runtime
+  without changing it. See [SMOKETEST.md](SMOKETEST.md).
+- **Where.** `omwcompat/diag.lua` (`RT.diag`): `inspect`, `compileCheck`, `readSettings`, `capture`,
+  `probeStubs`, `roundTrips`, `payloadCheck`; `runtime.lua` has a capture list in `writeLib` /
+  `warnOnce` and `RT._setCapture`. Probes must never leave state behind: `capture` restores error
+  counts, sound gate counters and `actors.animCalls`.
+- **Mod.** `smoketest/MWSE/mods/mwsuite/openmw/omwcompat_smoketest/` (`checks.lua` pure checks,
+  `runner.lua` report writer, `fixtures.lua` dev test cell, `main.lua` events and MCM).
+- **Plugin.** `smoketest/esp/omwc_smoketest.esp.json` -> `scripts/build-smoketest-esp.py` (tes3conv).
+- **Tests.** `tests/lua/test_smoketest.lua`, `tests/py/test_smoketest_esp.py`; the mock gained
+  `event.unregister/isRegistered`, `createKeyBinder`, `createTableVariable`, `tes3.getPlayerCell`
+  and the `saved` event.
 
 ## Further reading
 

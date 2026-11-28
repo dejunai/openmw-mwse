@@ -13,3 +13,4 @@ __pycache__/
 
 # OpenMW Lua API files fetched by `omw2mwse api-audit --fetch` (GPLv3): local cache only, never committed
 /openmw-api-cache/
+/build-smoketest/
