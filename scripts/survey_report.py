@@ -1,9 +1,16 @@
 #!/usr/bin/env python3
-"""Write docs/SURVEY-2026-11.md and docs/survey/*.csv from the aggregate json (dej (dejunai))."""
+"""Write docs/SURVEY-2026-11.md, docs/survey/*.csv, and the Known mods table in docs/GAPS.md (dej (dejunai)).
+
+  python3 scripts/survey_report.py <survey dir> docs
+  python3 scripts/survey_report.py --gaps-table [docs/survey/mods.csv] [docs/GAPS.md]
+"""
 import json, csv, sys, collections, re
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from survey_aggregate import norm_blocker, family
+from survey_gaps import write_gaps_table, maybe_run_gaps_table_only
+if maybe_run_gaps_table_only(sys.argv[1:]):
+    sys.exit(0)
 S = Path(sys.argv[1]); DOCS = Path(sys.argv[2])
 units = json.load(open(S / 'units.json')); agg = json.load(open(S / 'agg/aggregate.json'))
 sv = json.load(open(S / 'agg/scope_view.json')); deg = json.load(open(S / 'agg/degraded.json'))
@@ -122,6 +129,9 @@ A('python3 scripts/survey_run.py bin/omw2mwse <dir of clones> <out dir>   # dry-
 A('python3 scripts/survey_units.py                                         # builds units.json (paths set at top)')
 A('python3 scripts/survey_aggregate.py units.json agg                      # rankings, greedy order, manifest-lag view')
 A('python3 scripts/survey_report.py <survey dir> docs                      # this report and mods.csv')
+A('python3 scripts/survey_report.py --gaps-table                           # Known mods table in docs/GAPS.md')
 A('```')
 (DOCS / 'SURVEY-2026-11.md').write_text('\n'.join(L) + '\n', encoding='utf-8')
 print(len(L))
+# keep GAPS.md in sync when the survey report (and mods.csv) is regenerated
+write_gaps_table(DOCS / 'survey/mods.csv', DOCS / 'GAPS.md')
