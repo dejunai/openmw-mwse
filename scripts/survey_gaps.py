@@ -122,7 +122,7 @@ def gaps_table_markdown(rows):
     A("## Known mods (survey 2026-11)")
     A("")
     A(
-        "Dry-run of omw2mwse 0.3.2 / omwcompat 0.4.4 on 27 Nov 2026. Full write-up: "
+        "Dry-run of omw2mwse 0.3.2 / omwcompat 0.5.0 on 27 Nov 2026 (re-run after the 0.5.0 manifest sync). Full write-up: "
         "[SURVEY-2026-11.md](SURVEY-2026-11.md). %d ready, %d blocked (%d counted). "
         "This table is generated from [survey/mods.csv](survey/mods.csv) by "
         "`python3 scripts/survey_report.py --gaps-table`. Do not edit it by hand."

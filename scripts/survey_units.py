@@ -26,7 +26,7 @@ units = []; runs = []
 def add_dir(out, prefix_filter=None):
     for r in json.load(open(f'{S}/{out}/runs.json')):
         ident = r['id']
-        if out == 'out_corpus':
+        if out.endswith('_corpus'):
             n = ident.split('__', 1)[1]
             if n not in NEXUS: continue   # git-sourced corpus mods are covered by their fresh clones
         res = json.load(open(f'{S}/{out}/results/{ident}.json'))
@@ -36,7 +36,7 @@ def add_dir(out, prefix_filter=None):
         runs.append({'id': ident, 'exit': res['exit_code'], 'verdict': res['verdict'], 'errors': res['errors']})
         multi = [e for e in res['errors'] if 'different source folders' in e.get('message', '')]
         if multi:
-            vs = sorted(glob.glob(f'{S}/out/variants/{ident}#*.json'))
+            vs = sorted(glob.glob(f'{S}/out050/variants/{ident}#*.json'))
             if not vs: continue
             variants = []
             for v in vs:
@@ -55,20 +55,42 @@ def add_dir(out, prefix_filter=None):
             continue
         for m in res['mods']:
             units.append(dict(id=f'{ident}:{m["name"]}', repo=ident, mod=m['name'], variant='', verdict=m['verdict'], blockers=m['blockers'], url=url_for(ident), exit=res['exit_code'], scan=scan))
-for o in ('out', 'out_corpus', 'out_extra', 'out_ref'): add_dir(o)
+for o in ('out050', 'out050_corpus', 'out050_extra', 'out050_ref'): add_dir(o)
 for u in units:
     r = u['repo']; r_plain = r
     u['counted'] = not (u['mod'] in ENGINE_MODS or r in ENGINE_REPOS or TEST_RX.search(u['mod']))
     if u['verdict'] == 'failed': u['counted'] = False
     if u['verdict'] == 'no-lua': u['counted'] = False
-# dedupe by normalised mod name
-seen = {}
+# dedupe by normalised mod name; prefer the canonical host (modding-openmw, then a non-x__ checkout)
+def _src_quality(u):
+    url = u.get('url') or ''
+    repo = u['repo']
+    score = 0
+    if 'gitlab.com/modding-openmw/' in url or 'github.com/modding-openmw/' in url:
+        score += 8
+    if not repo.startswith('x__'):
+        score += 4
+    if repo.startswith('gitlab__') or repo.startswith('github__'):
+        score += 1
+    return score
+by_key = {}
 for u in units:
-    if not u['counted']: continue
+    if not u['counted']:
+        continue
     k = re.sub(r'[^a-z0-9]', '', u['mod'].lower())
-    if k in seen and seen[k].split(':')[0] != u['repo']:
-        u['counted'] = False; u['dup_of'] = seen[k]
-    else: seen.setdefault(k, u['id'])
+    if k not in by_key:
+        by_key[k] = u
+        continue
+    prev = by_key[k]
+    if prev['repo'] == u['repo']:
+        continue
+    if _src_quality(u) > _src_quality(prev):
+        prev['counted'] = False
+        prev['dup_of'] = u['id']
+        by_key[k] = u
+    else:
+        u['counted'] = False
+        u['dup_of'] = prev['id']
 for u in units: u.pop('scan', None) if False else None
 json.dump([{k: v for k, v in u.items() if k != 'scan'} for u in units], open(f'{S}/units.json', 'w'), indent=1)
 json.dump(runs, open(f'{S}/runs_all.json', 'w'), indent=1)
