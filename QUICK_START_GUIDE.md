@@ -32,7 +32,9 @@ Current versions are omw2mwse 0.3.2 and omwcompat 0.4.4.
 ## 2. If you use tidy (morrowind-conflict-tools)
 
 Let tidy call the converter on the **staged** OpenMW Lua mod. That is the
-intended path.
+intended path. To install the converter where tidy looks for it, copy
+`install-omw2mwse.bat` into the conflict-tools root (the folder that contains
+`vortex_tidy.py`) and run it; it clones this repo into `tools\omw2mwse`.
 
 - The converter writes the MWSE files **and** a copy of the omwcompat runtime
   into that staged folder. It does not write to Data Files. Vortex's deploy

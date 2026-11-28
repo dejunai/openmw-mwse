@@ -78,6 +78,23 @@ that result file. The same call works as `omw2mwse convert --staged-root ...`.
 The contract, exit codes and JSON fields are in
 [docs/TIDY_INTERFACE.md](docs/TIDY_INTERFACE.md).
 
+### Easy install for tidy
+
+This converter does not travel with morrowind-conflict-tools. To put it where
+tidy looks, copy [install-omw2mwse.bat](install-omw2mwse.bat) into the
+conflict-tools root (the folder that contains `vortex_tidy.py` and
+`mwdialog_check.py`) and run it.
+
+The script checks that it is in that folder and that Git is on PATH, then
+clones this repository into `tools\omw2mwse` (or, if that checkout already
+exists, updates it with `git pull --ff-only`). It never force-pushes, resets
+or cleans, and it does not touch anything else. tidy finds the converter at
+`tools\omw2mwse\bin\omw2mwse` and runs it with the same Python that runs
+`vortex_tidy.py` (Python 3.9+).
+
+Power users can clone https://github.com/dejunai/openmw-mwse.git to that path
+themselves.
+
 ## Where things land
 
 All of the following are written **inside the staged mod folder**:
