@@ -89,22 +89,33 @@ end
 F.note = note
 
 ------------------------------------------------------------------------ spawn / despawn
+-- 0.1.1 playtest: after a conversion had deleted a fixture, MWSE threw
+-- "sol: received nil for 'self'" on any field or method of that userdata
+-- (F.despawn line 78: `if not ref.deleted`). The count ran outside the pcall
+-- in remove(), so despawn aborted, F.spawned was never cleared, and every later
+-- spawn / respawn / save / leave failed the same way. Never touch a reference
+-- except through live() / remove().
+local function live(ref)
+    if ref == nil then return false end
+    local ok, deleted = pcall(function() return ref.deleted end)
+    return ok and not deleted
+end
+F.live = live
+
 local function remove(ref)
-    pcall(function()
-        if ref and not ref.deleted then
-            ref:disable()
-            ref:delete()
-        end
-    end)
+    if not live(ref) then return end
+    pcall(function() ref:disable() end)
+    pcall(function() ref:delete() end)
 end
 
 function F.despawn()
+    local leftover = F.spawned
+    F.spawned = {}   -- clear first so a later failure cannot leave a stale list
     local n = 0
-    for _, ref in ipairs(F.spawned) do
-        if not ref.deleted then n = n + 1 end
+    for _, ref in ipairs(leftover) do
+        if live(ref) then n = n + 1 end
         remove(ref)
     end
-    F.spawned = {}
     return n
 end
 
@@ -118,7 +129,8 @@ function F.purgeLeftovers()
     if not cell then return 0 end
     local kill = {}
     for ref in cell:iterateReferences() do
-        if ref.sourceMod == nil and not ref.deleted then kill[#kill + 1] = ref end
+        local ok, skip = pcall(function() return ref.sourceMod ~= nil or ref.deleted end)
+        if ok and not skip then kill[#kill + 1] = ref end
     end
     for _, ref in ipairs(kill) do remove(ref) end
     return #kill
@@ -154,7 +166,8 @@ function F.census()
     if not cell then c.missing = nil; return c end
     local byId, created = {}, 0
     for ref in cell:iterateReferences() do
-        if ref.sourceMod == nil and not ref.deleted then
+        local ok, keep = pcall(function() return ref.sourceMod == nil and not ref.deleted end)
+        if ok and keep then
             created = created + 1
             local id = tostring(ref.object and ref.object.id or "?"):lower()
             local e = byId[id]
@@ -215,8 +228,9 @@ function F.report()
     if not cell then return end
     note("report: %s; weather %s, hour %.1f", censusLine(F.census()), weatherName(), tes3.worldController and tes3.worldController.hour.value or -1)
     for _, ref in ipairs(F.spawned) do
-        if not ref.deleted then
-            local mob = ref.mobile
+        if live(ref) then
+            local okm, mob = pcall(function() return ref.mobile end)
+            mob = okm and mob or nil
             local extra = ""
             if mob and tags[ref] == "wildlife" then
                 extra = string.format(", fight %s, health %s", tostring(mob.fight), tostring(mob.health and mob.health.current))

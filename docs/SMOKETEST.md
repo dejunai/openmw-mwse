@@ -147,6 +147,8 @@ the **game hour** only moves forward (a rewound clock would confuse the converte
 midnight the day counter advances too), and **records** a conversion generated (LTLO's off-copy light
 records) stay in the save, unused.
 
+**Stale references (0.1.2, after the 0.1.1 playtest).** A conversion that deletes a fixture (Leave The Lights Off and No Fires in Bad Weather replace lights) leaves a dead userdata in the module's list. On 0.1.1, `F.despawn` read `ref.deleted` without a pcall and MWSE threw "sol: received nil for 'self'". That aborted spawn, so the respawn lever did nothing, and it also aborted the `save` event (Sophisticated Save System was writing a file when it happened). Every access now goes through a pcall, and the list is cleared before the references are removed.
+
 **Self-healing fixtures (0.1.2).** Converted mods delete, tombstone and replace references here, and a
 save can lose its `saved` event, so a census runs on every weather event (`weatherChangedImmediate`,
 `weatherTransitionStarted`, `weatherTransitionFinished`, `weatherCycled`) and every 1.5 s of unpaused play

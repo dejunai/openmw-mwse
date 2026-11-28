@@ -388,6 +388,31 @@ check(fixtureRefs(test) == FIX, "the respawn lever still works and resets the li
 mock.setHour(12)
 
 
+section("test cell: stale references cannot block spawn, save or leave")
+-- 0.1.1 playtest: MWSE throws "sol: received nil for 'self'" on a deleted
+-- tes3reference (conversions delete fixtures). Poison the list the same way.
+local function expire(ref)
+    return setmetatable({}, { __index = function() error("sol: received nil for 'self' argument") end,
+        __newindex = function() error("sol: received nil for 'self' argument") end })
+end
+fx.spawned[1] = expire(fx.spawned[1])
+local okSpawn, nSpawn, errsSpawn = pcall(fx.spawn, "stale list")
+check(okSpawn, "spawn does not throw when a tracked reference is already deleted")
+check(okSpawn and nSpawn == FIX and #(errsSpawn or {}) == 0, "spawn refills the cell anyway (" .. tostring(nSpawn) .. ")")
+check(fixtureRefs(test) == FIX, "fixtures are all present after a spawn that hit a stale reference")
+fx.spawned[2] = expire(fx.spawned[2])
+local okSave = pcall(function() mock.fire("save", { filename = "stale" }) end)
+check(okSave, "onSave does not throw on a stale reference (it would crash a real save)")
+check(created(test) == 0, "fixtures were still taken out for the save")
+mock.fire("saved", {})
+check(fixtureRefs(test) == FIX, "fixtures are back after that save")
+fx.spawned[3] = expire(fx.spawned[3])
+local okLeave = pcall(function() tes3.positionCell({ reference = player, cell = ext, position = { 11, 22, 33 } }) end)
+check(okLeave, "leaving does not throw on a stale reference")
+check(created(test) == 0, "no fixture left after leaving")
+tes3.positionCell({ reference = player, cell = test, position = { 0, 0, 8 } })
+check(fixtureRefs(test) == FIX, "fixtures return when we come back")
+
 section("test cell: NFiBW-style weather and LTLO night in the cell")
 mock.setWeather(4)       -- rain
 mock.setHour(22)
