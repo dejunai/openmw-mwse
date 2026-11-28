@@ -11,7 +11,7 @@ MWSE: a runtime library named **omwcompat** provides the `openmw.*` API so those
 scripts can run unmodified inside MWSE.
 
 It is a personal project by **dej (dejunai)**. Current versions: **omw2mwse 0.3.2**
-(the converter) and **omwcompat 0.4.4** (the runtime).
+(the converter) and **omwcompat 0.5.0** (the runtime).
 
 If you want the short path and are willing to accept the risk, see
 [QUICK_START_GUIDE.md](QUICK_START_GUIDE.md). Come back here when something
@@ -173,27 +173,68 @@ renderers (`checkbox`, `number`, `select`, `textLine`, `color`) get native MCM
 controls. Since 0.4.1, a custom renderer whose value is a flat table of numbers
 and/or booleans is expanded into one MCM control per key.
 
-**Animations are not ported.** Since omwcompat 0.4.2, `openmw.animation` and
-`I.AnimationController` exist so a script that requires them keeps running, but
-every call does nothing and queries answer "not playing". The first call from
-each mod logs one warning; later calls are counted, not logged. The converter
-still treats `openmw.animation` as unsupported, so a mod that needs animation
-stays **blocked** even though the runtime no longer errors on the require.
+**Simple animations play; the rest are quiet no-ops (omwcompat 0.5.0).**
+`openmw.animation` and `I.AnimationController` exist in every hosted script
+(the interface only in actor scripts). What is mapped to MWSE:
 
-**Movement-control writes are ignored.** `self.controls.sneak`, `run` and `jump`
-can be read (the actor's current state). Other fields read as nil. Since
-omwcompat 0.4.3, writes no longer raise: the first write of each field logs one
-warning and is ignored; later writes are silent. The actor is not steered.
+- `playBlended`, `playQueued` and `I.AnimationController.playBlendedAnimation`
+  play through `tes3.playAnimation` when the group is a **vanilla Morrowind
+  animation group** the actor has (`idle2`, `hit1`, `walkforwardhh`, ...) and
+  the default `start` / `stop` keys are used. Scripted priority on an NPC or
+  creature plays on the whole body and pauses its AI, like `PlayGroup`. Other
+  priorities, and anything on the player, are layered on the body parts of the
+  blend mask while the AI or the player keeps control. `loops` is honoured;
+  `speed`, `startPoint` and per-bone priorities are not.
+- `hasAnimation`, `hasGroup`, `isPlaying`, `getActiveGroup` and
+  `getCurrentTime` read the actor's MWSE animation data.
+- `cancel` and `clearAnimationQueue(actor, true)` only stop an animation that
+  omwcompat started, by handing the actor back to its AI.
+  `setLoopingEnabled(false)` ends the loop, and `skipAnimationThisFrame` skips
+  a frame.
+- Handlers: playBlendedAnimation handlers run for calls made through the
+  interface, and may change the options or skip the play. Text key handlers
+  get `start` when a group starts and `stop` when a group omwcompat started
+  ends, and animationEnded handlers run when such a group ends. No other text
+  keys fire (`hit`, `attach`, `release`, ...).
+
+Custom groups from animation replacers (Thieves Pickpocket's `give02`, for
+example), custom start/stop keys, and `getCompletion`, `getTextKeyTime`,
+`getLoopCount`, `getSpeed`, `setSpeed`, `hasBone`, `addGlow`, `addVfx` and
+`removeVfx` still do nothing. Queries answer "not playing" and nothing ever
+raises. The first such call from each mod logs one warning; later ones are
+counted. Since 0.5.0 the converter no longer blocks a mod for using
+`openmw.animation`, `I.AnimationController` or `self.controls`. Mapped calls
+count as partial and the quiet no-ops as stubs, so they show up as warnings in
+a scan, not as blockers.
+
+**Movement controls (omwcompat 0.5.0).** Reads: `sneak`, `run` and `jump` are
+the actor's current state, `movement` and `sideMovement` are -1, 0 or 1 from
+its movement flags, and `yawChange` and `pitchChange` read 0. Writes on NPCs
+and creatures:
+
+- `yawChange` turns the actor (its facing) by that many radians when written.
+  The AI may turn it back.
+- `run` and `sneak` set MWSE's force-run and force-sneak flags. This works on
+  NPCs only, since creatures have no such flags.
+- `jump = true` makes the actor jump.
+
+`pitchChange`, `movement`, `sideMovement`, `use`, and any write on the player
+log one warning per field and are ignored. A write never raises.
 
 **HUD and UI are not ported**, except `ui.showMessage` (a message box). There are
 no windows, layouts, widgets, templates or HUD elements. Mods such as ammo
 counters and compasses are out of scope.
 
-**Sound gate (omwcompat 0.4.1).** Morrowind will play a light's own loop even
-when an OpenMW mod has turned that light off or removed it. omwcompat stops
-sounds on objects it has removed or disabled, and it blocks an off-by-default
-copy that it generated from playing its own loop. Other mods' lights and vanilla
-records are not touched. The first block of each kind is logged once.
+**Sound gate (omwcompat 0.4.1, extended in 0.5.0).** Morrowind will play a
+light's sound even when an OpenMW mod has turned that light off or removed it.
+omwcompat stops sounds on objects it has removed or disabled. It then blocks
+new sounds on them: any sound on an object it removed, any sound on a light a
+script disabled while it stays disabled, and the light's own loop on an
+off-by-default copy that omwcompat generated. Since 0.5.0 this covers one-off
+plays as well as loops: `core.sound.playSound3d`, `playSoundFile3d`, sounds
+from files, and the engine's sound generators. Voice lines are never blocked.
+Other mods' lights and vanilla records are not touched. The first block of
+each kind is logged once.
 
 **Not provided:** `openmw.camera`, `openmw.postprocessing`, `openmw.debug`,
 `openmw.menu`, `openmw.content`, and `openmw_aux.ui`. `openmw.ambient` and
@@ -290,11 +331,11 @@ one MWSE.log line says so and further messages fall back to MWSE.log.
 
 **MWSE.log only gets these initialization lines:**
 
-- `[omwcompat 0.4.4] loaded`
-- `[omwcompat 0.4.4] library log: Data Files/MWSE/logs/omwcompat.log`
-- `[omwcompat 0.4.4] registered <Mod> (N script(s)).` once per registered mod
+- `[omwcompat 0.5.0] loaded`
+- `[omwcompat 0.5.0] library log: Data Files/MWSE/logs/omwcompat.log`
+- `[omwcompat 0.5.0] registered <Mod> (N script(s)).` once per registered mod
   (a short support notice may follow on the same line)
-- `[omwcompat 0.4.4] could not open Data Files/MWSE/logs/omwcompat.log (...);
+- `[omwcompat 0.5.0] could not open Data Files/MWSE/logs/omwcompat.log (...);
   further messages go to MWSE.log` if the library log could not be opened
 - `[<Mod>] omwcompat runtime is missing or failed to load: ...` from the
   generated `main.lua`, because the library never loaded
@@ -305,23 +346,29 @@ converted mods' `print()`, and a BUILT_FOR mismatch from a conversion built
 by omw2mwse 0.3.2 (that line is sent through `omwcompat.note`). A few of
 those lines are normal and are not a crash:
 
-- `[omwcompat 0.4.4] SomeMod was built for omwcompat 0.4.0 (loaded 0.4.4)` -
+- `[omwcompat 0.5.0] SomeMod was built for omwcompat 0.4.0 (loaded 0.5.0)` -
   the shared runtime in Data Files is newer (or older) than the one the
   converter bundled when that mod was built. Newer runtimes are meant to keep
   running older conversions. Nothing is logged when the versions match. A mod
   converted with omw2mwse older than 0.3.2 still writes this line to MWSE.log;
   re-convert it to move the line into the library log. Already-converted mods
   do not need a re-convert for `print()` or runtime warnings: those go through
-  the 0.4.4 shim.
-- `<mod>: <call> does nothing: animations are not ported by omwcompat ...` -
-  one warning per mod the first time it touches `openmw.animation` or
-  `I.AnimationController`. Later calls are counted, not logged. Animations do
-  not play.
-- `self.controls.<name> cannot be set: movement controls are not emulated by
-  omwcompat ...` - one warning per field the first time a script writes
-  `self.controls`. The write is ignored; the script continues.
+  the 0.4.4+ shim.
+- `<mod>: <call> does nothing (<reason>): omwcompat ... maps only simple
+  vanilla-group calls to MWSE ...` - one warning per mod the first time it
+  makes an animation call that is not mapped (a custom group, custom keys,
+  VFX, ...). Later calls are counted, not logged.
+- `[omwcompat] <mod>: <call> is played through MWSE (tes3.playAnimation) ...`
+  - one note per mod the first time an animation is actually played.
+- `self.controls.<name> is applied as ...` - one note per field the first time
+  a mapped control (`yawChange`, `run`, `sneak`, `jump`) is written.
+- `self.controls.<name> cannot be set (<reason>): omwcompat ... maps only
+  yawChange, run, sneak and jump on NPCs and creatures ...` - one warning per
+  field the first time a script writes a control that is not mapped. The write
+  is ignored; the script continues.
 - `[omwcompat] sound gate: kept ... from playing ...` - one log the first time
-  the sound gate blocks a removed or off-by-default light. Later blocks are
+  the sound gate blocks each kind (a removed object, a light a script disabled,
+  an off-by-default copy). Later blocks are
   counted, not logged.
 
 Treat these as real problems (in the library log, or on MWSE.log if the file
@@ -340,8 +387,9 @@ could not be opened):
 
 ## Known limits
 
-- Animations, movement-control writes, and HUD/UI (beyond `ui.showMessage`) are
-  not ported, as described above.
+- Only simple animations on vanilla groups play, and only `yawChange`, `run`,
+  `sneak` and `jump` steer an actor. HUD/UI beyond `ui.showMessage` is not
+  ported. All of this is described above.
 - MENU handlers, LOAD scripts and ITEM scripts are not hosted.
 - `openmw.nearby` has no pathfinding; custom magic effects are not available;
   events to an object outside the active cells are dropped. See
@@ -372,9 +420,10 @@ could not be opened):
   that line into the library log. If you want the line gone entirely, the
   loaded runtime must match the one the mod was built for.
 - **Lights keep making sound after the mod turned them off.** You may be on a
-  runtime older than 0.4.1, or the light is not one omwcompat generated or
-  removed. The sound gate only covers omwcompat's own off copies and removed
-  objects.
+  runtime older than 0.4.1 (0.5.0 for one-off sounds), or the light is not one
+  omwcompat generated, removed, or disabled. The sound gate only covers
+  omwcompat's own off copies, objects it removed, and lights a converted script
+  disabled.
 - **The mod is on but seems to do nothing.** Check **MW Conversions** for the
   "Mod enabled" switch, MWSE.log for a missing runtime or a failed library-log
   open, and `Data Files/MWSE/logs/omwcompat.log` for warnings and errors.

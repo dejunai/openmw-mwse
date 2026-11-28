@@ -13,7 +13,7 @@ local timing = require("omwcompat.timing")
 local guards = require("omwcompat.guards")
 local player = require("omwcompat.player")
 
-local RT = { VERSION = "0.4.4", API_REVISION = 70, PROBE_API_REVISION = 100 }
+local RT = { VERSION = "0.5.0", API_REVISION = 70, PROBE_API_REVISION = 100 }
 local LOCAL_FLAG_NAMES
 objects.init(RT)
 settings.init(RT)
@@ -623,7 +623,7 @@ local function buildModules(m, S)
             end,
         }),
     }
-    -- openmw.animation: present so animation calls degrade to quiet no-ops (see actors.lua, 0.4.2)
+    -- openmw.animation: simple vanilla-group calls are mapped, the rest are quiet no-ops (actors.lua, 0.5.0)
     modules["openmw.animation"] = actors.animationModule(m.name)
     if S.isLocal then
         -- local scripts: openmw.self / openmw.nearby exist, openmw.world does not (OpenMW rule)
@@ -804,7 +804,7 @@ function RT.makeInterfaces(m, S)
     }
     local Settings = settings.interface(m, S)
     local AI = S.isActor and actors.aiInterface(function() return S.self end) or nil
-    local AnimationController = S.isActor and actors.animationControllerInterface(m.name) or nil
+    local AnimationController = S.isActor and actors.animationControllerInterface(m.name, function() return S.self end, S) or nil
     return setmetatable({}, {
         __index = function(_, k)
             if k == "Activation" then return Activation end
@@ -1383,22 +1383,33 @@ function RT.objectBecameActive(w)
     local ref = objects.refOf(w)
     if ref then RT.queueActive(ref) end
 end
--- Sound gate (0.4.1). OpenMW never plays the loop of a light whose record is "off by
--- default" (mwclass/light.cpp insertObject), and a removed object makes no sound. Morrowind
--- plays a light's own sound whatever the flag says and keeps it on disabled references, so
--- the off copies that LTLO / No Fires in Bad Weather place (createRecordDraft{ isOffByDefault
--- = true } of a torch) kept crackling, and the engine kept restarting those loops because it
--- reported them as not playing. Blocked here, before other addSound handlers:
---   removed : any sound on a reference omwcompat removed (R1 tombstone)
---   offCopy : the record's own sound on a light omwcompat created ("Generated:0x..") that is
---             off by default. Other mods' lights and vanilla records are never touched.
-RT.soundGate = { enabled = true, removed = 0, offCopy = 0 }
+-- Sound gate (0.4.1, one-off sounds 0.5.0). OpenMW never plays the loop of a light whose
+-- record is "off by default" (mwclass/light.cpp insertObject), and a removed or disabled
+-- object makes no sound. Morrowind plays a light's own sound whatever the flag says and keeps
+-- it on disabled references, so the off copies that LTLO / No Fires in Bad Weather place
+-- (createRecordDraft{ isOffByDefault = true } of a torch) kept crackling, and the engine kept
+-- restarting those loops because it reported them as not playing. Blocked here, before other
+-- addSound / addTempSound handlers:
+--   removed  : any sound on a reference omwcompat removed (R1 tombstone)
+--   disabled : any sound on a light a script disabled (GameObject.enabled = false) that is
+--              still disabled (0.5.0)
+--   offCopy  : the record's own sound on a light omwcompat created ("Generated:0x..") that is
+--              off by default (addSound only: sounds by id). Other mods' lights and vanilla
+--              records are never touched.
+-- addSound carries sounds by id (tes3.playSound{ sound }, core.sound.playSound3d, the
+-- engine's light loops); addTempSound carries sound files and voice (tes3.playSound{
+-- soundPath }, core.sound.playSoundFile3d, tes3.say, sound generators), so one-off plays
+-- that a mod or the engine starts on a removed / disabled light are kept quiet too (0.5.0).
+-- Voice-over (isVoiceover) is never blocked.
+RT.soundGate = { enabled = true, removed = 0, disabled = 0, offCopy = 0, oneOff = 0 }
 local LIGHT_OT
-local function soundBlockReason(ref, snd)
+local function soundBlockReason(ref, snd, temp)
     if objects.isTomb(ref) then return "removed" end
     local obj = ref.object
     LIGHT_OT = LIGHT_OT or tes3.objectType.light
-    if not obj or obj.objectType ~= LIGHT_OT or not obj.isOffByDefault then return nil end
+    if not obj or obj.objectType ~= LIGHT_OT then return nil end
+    if objects.isScriptDisabled and objects.isScriptDisabled(ref) then return "disabled" end
+    if temp or not obj.isOffByDefault then return nil end
     local own = obj.sound
     if not own or not snd then return nil end
     if snd ~= own and tostring(snd.id):lower() ~= tostring(own.id):lower() then return nil end
@@ -1406,23 +1417,28 @@ local function soundBlockReason(ref, snd)
     return "offCopy"
 end
 RT.soundBlockReason = soundBlockReason
-function RT.onAddSound(e)
+local GATE_WHY = { removed = "an object a script removed", disabled = "a light a script disabled",
+    offCopy = "a light that is off by default" }
+local function gate(e, temp)
     local g = RT.soundGate
     if not g.enabled or e.block or e.isVoiceover then return end
     local ref = e.reference
     if not ref then return end
-    local ok, why = pcall(soundBlockReason, ref, e.sound)
+    local ok, why = pcall(soundBlockReason, ref, e.sound, temp)
     if not ok or not why then return end
     e.block = true
     g[why] = g[why] + 1
+    if temp or e.flags == 0 then g.oneOff = g.oneOff + 1 end
     if g[why] == 1 then
-        local sid = e.sound and e.sound.id or "?"
+        local sid = e.sound and e.sound.id or (e.path ~= nil and e.path ~= "" and e.path) or "?"
         local oid = ref.object and ref.object.id or "?"
         writeLib(string.format("[omwcompat] sound gate: kept %s from playing on %s (%s), as OpenMW does; further cases are counted, not logged",
-            tostring(sid), tostring(oid), why == "removed" and "an object a script removed" or "a light that is off by default"))
+            tostring(sid), tostring(oid), GATE_WHY[why]))
     end
     return false
 end
+function RT.onAddSound(e) return gate(e, false) end
+function RT.onAddTempSound(e) return gate(e, true) end
 
 local function flushActive()
     if #state.activeQueue == 0 then return end
@@ -1538,6 +1554,7 @@ frameWork = function(e)
     if dt > 0 then tickTimers() end
     callAll("onUpdate", dt)
     RT.updateLocals(dt)
+    safecall("animation tick", actors.animTick)
     RT.playerHandlers("onFrame", e.delta or 0)   -- player scripts: every frame, also while paused
 end
 
@@ -1753,6 +1770,7 @@ local function wire()
     end
     event.register(tes3.event.modConfigReady, RT.onModConfigReady)
     if tes3.event.addSound then event.register(tes3.event.addSound, RT.onAddSound, { priority = 1000 }) end
+    if tes3.event.addTempSound then event.register(tes3.event.addTempSound, RT.onAddTempSound, { priority = 1000 }) end
     event.register(tes3.event.keyDown, function(e) RT.onKey(e, "onKeyPress") end)
     event.register(tes3.event.keyUp, function(e) RT.onKey(e, "onKeyRelease") end)
     event.register(tes3.event.journal, RT.onJournal)

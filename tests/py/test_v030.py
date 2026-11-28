@@ -32,10 +32,10 @@ def make_mod(root: Path, files: dict, omwscripts: str) -> None:
 class Versions(unittest.TestCase):
     def test_versions(self):
         self.assertEqual(omw2mwse.__version__, "0.3.2")
-        self.assertEqual(MANIFEST["version"], "0.4.4")
-        self.assertEqual(B.runtime_version(), "0.4.4")
+        self.assertEqual(MANIFEST["version"], "0.5.0")
+        self.assertEqual(B.runtime_version(), "0.5.0")
         rt = (ROOT / "runtime/MWSE/lib/omwcompat/runtime.lua").read_text(encoding="utf-8")
-        self.assertIn('VERSION = "0.4.4"', rt)
+        self.assertIn('VERSION = "0.5.0"', rt)
 
 
 class RuntimeLineEnds(unittest.TestCase):
@@ -102,7 +102,7 @@ class PlayerAndCustomHosting(unittest.TestCase):
         self.assertIn("tes3.messageBox", apis["openmw.ui.showMessage"])
         self.assertIn("outside menus", apis["engineHandler:onKeyPress"])
 
-    def test_ui_layouts_and_animation_stay_blocked(self):
+    def test_ui_layouts_stay_blocked_animation_does_not(self):
         s = self.scan({"scripts/M/p.lua": (
             "local ui = require('openmw.ui')\nlocal anim = require('openmw.animation')\n"
             "return { engineHandlers = { onFrame = function() ui.create({}) ; anim.playBlended(nil, 'x', {}) end } }\n")},
@@ -110,7 +110,7 @@ class PlayerAndCustomHosting(unittest.TestCase):
         self.assertEqual(s.verdict, "blocked")
         text = "\n".join(s.blockers)
         self.assertIn("openmw.ui.create", text)
-        self.assertIn("openmw.animation", text)
+        self.assertNotIn("openmw.animation", text)  # 0.5.0: mapped / stubbed, never a blocker
 
     def test_custom_scripts_and_add_script(self):
         s = self.scan({
@@ -158,7 +158,7 @@ class ManifestEntries(unittest.TestCase):
                      "openmw.types.Lockable.lock": "full"}.items():
             self.assertEqual(classify(k, MANIFEST), v, k)
         self.assertNotIn("openmw.ui", MANIFEST["unsupportedModules"])
-        self.assertIn("openmw.animation", MANIFEST["unsupportedModules"])
+        self.assertNotIn("openmw.animation", MANIFEST["unsupportedModules"])  # 0.5.0
         self.assertIn("Enabled switch", MANIFEST["notes"])
 
     def test_manifest_is_ascii_lf_no_bom(self):

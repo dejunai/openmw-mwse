@@ -89,7 +89,7 @@ class ScanTests(unittest.TestCase):
         self.assertEqual(classify("openmw.world.doesNotExist", MANIFEST), "unsupported")
         self.assertEqual(classify("openmw.ui.showMessage", MANIFEST), "partial")
         self.assertEqual(classify("openmw.ui.create", MANIFEST), "unsupported")
-        self.assertEqual(classify("openmw.animation.playBlended", MANIFEST), "unsupported")
+        self.assertEqual(classify("openmw.animation.playBlended", MANIFEST), "partial")  # 0.5.0
         self.assertEqual(classify("openmw.async.newRealTimer", MANIFEST), "partial")  # legacySymbols
         self.assertEqual(classify("openmw.interfaces.SomeMod.fn", MANIFEST), "interface")
         self.assertEqual(classify("openmw.types.Light", MANIFEST), "full")
@@ -241,7 +241,9 @@ class LocalScriptScanTests(unittest.TestCase):
         self.assertEqual(classify("openmw.interfaces.AI.forEachPackage", MANIFEST), "unsupported")
         self.assertEqual(classify("openmw.interfaces.SomeMod.fn", MANIFEST), "interface")
         self.assertEqual(classify("openmw.self.controls.sneak", MANIFEST), "partial")
-        self.assertEqual(classify("openmw.self.controls.movement", MANIFEST), "unsupported")
+        self.assertEqual(classify("openmw.self.controls.movement", MANIFEST), "partial")  # 0.5.0: reads; writes ignored
+        self.assertEqual(classify("openmw.self.controls.pitchChange", MANIFEST), "stub")
+        self.assertEqual(classify("openmw.interfaces.AnimationController.addTextKeyHandler", MANIFEST), "partial")
         self.assertEqual(classify("openmw.nearby.castRay", MANIFEST), "partial")
         self.assertEqual(classify("openmw.nearby.findPath", MANIFEST), "unsupported")
 

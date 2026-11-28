@@ -43,8 +43,8 @@ class FixtureScan(unittest.TestCase):
         self.assertEqual(self.r["guardedRequires"], ["openmw.interfaces", "openmw.animation", "openmw.util"])
         self.assertEqual(self.sym["openmw.interfaces.Activation.addHandlerForType"], "full")
         self.assertEqual(self.sym["openmw.util.vector3"], "full")
-        self.assertEqual(self.sym["openmw.animation.addGlow"], "unsupported")
-        self.assertIn("requires unsupported module openmw.animation", self.r["blockers"])
+        self.assertEqual(self.sym["openmw.animation.addGlow"], "stub")  # 0.5.0: a quiet no-op, not a blocker
+        self.assertNotIn("requires unsupported module openmw.animation", self.r["blockers"])
         self.assertTrue(any("pcall(require" in w for w in self.r["warnings"]))
 
     def test_multi_assign_and_table_keys(self):

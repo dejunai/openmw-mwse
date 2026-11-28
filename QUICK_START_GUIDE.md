@@ -27,7 +27,7 @@ for the mod you are about to convert is also a good idea. There is no
 - To run the converter yourself: **Python 3.9+**, from a checkout of this repo,
   via `bin/omw2mwse` (or `py -3 bin/omw2mwse` on Windows).
 
-Current versions are omw2mwse 0.3.2 and omwcompat 0.4.4.
+Current versions are omw2mwse 0.3.2 and omwcompat 0.5.0.
 
 ## 2. If you use tidy (morrowind-conflict-tools)
 
@@ -82,9 +82,9 @@ and is a reasonable first look.
 This library does not spam MWSE.log. After load, MWSE.log should only show
 initialization lines:
 
-- `[omwcompat 0.4.4] loaded`
-- `[omwcompat 0.4.4] library log: Data Files/MWSE/logs/omwcompat.log`
-- `[omwcompat 0.4.4] registered <Mod> (N script(s)).` once per converted mod
+- `[omwcompat 0.5.0] loaded`
+- `[omwcompat 0.5.0] library log: Data Files/MWSE/logs/omwcompat.log`
+- `[omwcompat 0.5.0] registered <Mod> (N script(s)).` once per converted mod
   (a short support notice may follow on the same line)
 
 If the library log cannot be opened, one MWSE.log line says
@@ -102,15 +102,18 @@ than 0.3.2 still writes its BUILT_FOR line to MWSE.log until you re-convert.
 
 These library-log lines can show up once and then go quiet. That is expected:
 
-- `[omwcompat 0.4.4] SomeMod was built for omwcompat 0.4.0 (loaded 0.4.4)` -
+- `[omwcompat 0.5.0] SomeMod was built for omwcompat 0.4.0 (loaded 0.5.0)` -
   the deployed runtime is a different version than the one bundled at convert
   time. Newer runtimes still run older conversions.
-- `... does nothing: animations are not ported by omwcompat ...` - animations
-  are stubs. One warning per mod; they will not play.
-- `self.controls.<name> cannot be set: movement controls are not emulated ...` -
-  a write was ignored, one warning per field. The script should keep running.
-- `[omwcompat] sound gate: kept ... from playing ...` - an off or removed light
-  was kept silent, once per kind.
+- `... does nothing (...): omwcompat ... maps only simple vanilla-group calls ...` -
+  an animation call that is not mapped (custom group, VFX, ...). One warning
+  per mod; that animation will not play.
+- `... is played through MWSE (tes3.playAnimation) ...` and
+  `self.controls.<name> is applied as ...` - notes that a mapped call ran.
+- `self.controls.<name> cannot be set (...) ...` - a write was ignored, one
+  warning per field. The script should keep running.
+- `[omwcompat] sound gate: kept ... from playing ...` - an off, disabled or
+  removed light was kept silent, once per kind.
 
 These are real problems:
 

@@ -1141,7 +1141,15 @@ PARTIAL_NOTES = {
                              "on the next frame when the object is active; also callable from local scripts",
     "openmw.self.removeScript": "only scripts added with addScript; their saved data is dropped, no handler is called",
     "openmw.self.hasScript": "addScript'ed, running, or matched by the object's type flags (PLAYER on the player)",
-    "openmw.self.controls": "sneak/run/jump read the actor's current state; other controls warn; writes raise",
+    "openmw.animation": "vanilla animation groups the actor has, default start/stop keys only, via tes3.playAnimation "
+                        "(Scripted priority on NPCs: whole body; otherwise layered); queries read the MWSE animation "
+                        "data; cancel only undoes omwcompat's own plays; speed, custom groups/keys and VFX are no-ops "
+                        "(omwcompat 0.5.0)",
+    "openmw.interfaces.AnimationController": "playBlendedAnimation runs the script's handlers then plays like "
+                                             "openmw.animation.playBlended; text keys: only start/stop; ended handlers "
+                                             "only for groups omwcompat started (omwcompat 0.5.0)",
+    "openmw.self.controls": "sneak/run/jump read the actor's state; writes of yawChange/run/sneak/jump steer NPCs and "
+                            "creatures (omwcompat 0.5.0); other writes, and writes on the player, warn once and are ignored",
     "openmw.types.*.getEquipment": "from ref.object.equipment, items placed in OpenMW slots by record type and slot",
     "openmw.types.*.setEquipment": "mobile:equip / unequip; the actor must be active; items must be in the inventory",
     "openmw.types.*.getStance": "mobile.castReady -> Spell, weaponReady -> Weapon, else Nothing",

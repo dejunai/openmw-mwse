@@ -91,6 +91,11 @@ local function silence(ref)
 end
 M.silence = silence
 
+-- References a script disabled with GameObject.enabled = false (0.5.0), for the sound gate:
+-- OpenMW plays no sound on a disabled object, Morrowind does. Session-only, weak keys.
+local scriptDisabled = setmetatable({}, { __mode = "k" })
+function M.isScriptDisabled(ref) return ref ~= nil and scriptDisabled[ref] == true and ref.disabled == true end
+
 local function setTomb(ref, on)
     local cid = contentId(ref)
     if cid then
@@ -679,7 +684,13 @@ OBJ.__newindex = function(w, k, v)
         end
         local ref = refOf(w)
         if not ref then error("GameObject.enabled: invalid object", 2) end
-        if v then ref:enable() else ref:disable(); silence(ref) end
+        if v then
+            scriptDisabled[ref] = nil
+            ref:enable()
+        else
+            ref:disable(); silence(ref)
+            scriptDisabled[ref] = true
+        end
         return
     end
     error("GameObject fields are read-only (" .. tostring(k) .. ")", 2)

@@ -7,7 +7,10 @@
 --   types.NPC.getDisposition / getBaseDisposition (0.4.2)       -> npc instance .disposition / .baseDisposition
 --   openmw.nearby                                              -> references in tes3.getActiveCells()
 --   I.AI (actor local scripts)                                 -> mobile:startCombat / tes3.setAI* / aiPlanner
---   openmw.animation, I.AnimationController                    -> quiet no-ops (0.4.2): animations are not ported
+--   openmw.animation, I.AnimationController                    -> vanilla groups via tes3.playAnimation /
+--                                                                 animationData (0.5.0); the rest quiet no-ops
+--   self.controls                                              -> mobile state reads; yawChange / run / sneak /
+--                                                                 jump writes on NPCs and creatures (0.5.0)
 -- Every mapping is by rule (OpenMW name -> MWSE field), never per mod. Actors whose
 -- mobile is not loaded (outside the active cells) fall back to their base record values.
 -- MIT, Copyright (c) 2026 dej (dejunai).
@@ -396,29 +399,99 @@ local function skillStat(key)
     end
 end
 
----------------------------------------------------------------- controls (0.4.0 read, 0.4.3 writes)
--- self.controls: sneak/run/jump read the actor's current state (mobile.isSneaking, isRunning,
--- isJumping); OpenMW's controls are inputs a script can set, which omwcompat does not emulate.
--- Writes used to raise (0.4.0), which aborted Thieves Pickpocket's onInactive (stopTracking
--- always does self.controls.yawChange = 0, MWSE.log 2026-11-27 04:00:03). Since 0.4.3 a write
--- warns once and is ignored, so the rest of the handler still runs.
-local CONTROLS = { sneak = "isSneaking", run = "isRunning", jump = "isJumping" }
+---------------------------------------------------------------- controls (0.4.0 read, 0.4.3 writes, 0.5.0 mapping)
+-- self.controls reads: sneak/run/jump are the actor's current state (mobile.isSneaking,
+-- isRunning, isJumping); movement / sideMovement are -1, 0 or 1 from the mobile's movement
+-- flags (isMovingForward/Back, isMovingRight/Left); yawChange / pitchChange read 0 (OpenMW
+-- applies them every frame and starts the next frame at 0).
+-- Writes (0.5.0), on NPCs and creatures (not the player, whose controls are the keyboard):
+--   yawChange   -> reference.facing += value (radians, positive turns right, as OpenMW). It is
+--                  applied when written, so a script that writes it every update turns the
+--                  actor by the same steps; the AI may turn the actor back
+--   run, sneak  -> mobile.forceRun / forceSneak (NPCs; creatures have no such flags)
+--   jump = true -> mobile:doJump()
+-- Everything else (pitchChange, movement, sideMovement, use, and any write on the player)
+-- warns once per field and is ignored, as in 0.4.3: Thieves Pickpocket's onInactive does
+-- self.controls.yawChange = 0 and must run to the end. A write never raises.
+local CONTROL_READ = { sneak = "isSneaking", run = "isRunning", jump = "isJumping" }
+local FORCE_FLAG = { run = "forceRun", sneak = "forceSneak" }
+M.controlWrites = { applied = {}, ignored = {} }
+local function ignoredWrite(k, why)
+    local t = M.controlWrites.ignored
+    t[k] = (t[k] or 0) + 1
+    rt.warnOnce("controls.set." .. tostring(k),
+        "self.controls.%s cannot be set%s: omwcompat %s maps only yawChange, run, sneak and jump on NPCs and creatures (the write is ignored; further writes are counted, not logged)",
+        tostring(k), why and (" (" .. why .. ")") or "", rt.VERSION)
+end
+local function appliedWrite(k, how)
+    local t = M.controlWrites.applied
+    t[k] = (t[k] or 0) + 1
+    if t[k] == 1 and rt.note then
+        rt.note("[omwcompat] self.controls.%s is applied as %s (omwcompat %s); further writes are counted, not logged", k, how, rt.VERSION)
+    end
+end
+local TWO_PI = 2 * math.pi
+local function wrapAngle(a)
+    a = a % TWO_PI
+    if a > math.pi then a = a - TWO_PI end
+    return a
+end
+local function writeControl(selfObj, k, v)
+    local mob, ref = mobileOf(selfObj)
+    if not ref then return ignoredWrite(k, "no object") end
+    local ot = ref.object and ref.object.objectType
+    local OT = tes3.objectType
+    local isNpc, isCreature = ot == OT.npc, ot == OT.creature
+    if ref == tes3.player then return ignoredWrite(k, "the player") end
+    if not (isNpc or isCreature) then return ignoredWrite(k, "not an NPC or creature") end
+    if k == "yawChange" then
+        if type(v) ~= "number" or v ~= v then return ignoredWrite(k, "not a number") end
+        if v == 0 then appliedWrite(k, "a facing change"); return end
+        local ok = pcall(function()
+            local cur = ref.facing
+            if type(cur) ~= "number" then cur = ref.orientation.z end
+            ref.facing = wrapAngle(cur + v)
+        end)
+        if ok then appliedWrite(k, "a facing change") else ignoredWrite(k, "MWSE refused the facing") end
+        return
+    end
+    if FORCE_FLAG[k] then
+        if not isNpc then return ignoredWrite(k, "creatures cannot be forced to " .. k) end
+        if not mob then return ignoredWrite(k, "the actor is not active") end
+        local f = FORCE_FLAG[k]
+        local ok = pcall(function() mob[f] = v and true or false end)
+        if ok then appliedWrite(k, "mobile." .. f) else ignoredWrite(k, "MWSE refused mobile." .. f) end
+        return
+    end
+    if k == "jump" then
+        if not v then appliedWrite(k, "mobile:doJump()"); return end
+        if not mob then return ignoredWrite(k, "the actor is not active") end
+        local ok = pcall(function() return mob:doJump({}) end)
+        if ok then appliedWrite(k, "mobile:doJump()") else ignoredWrite(k, "MWSE refused the jump") end
+        return
+    end
+    return ignoredWrite(k)
+end
+M.writeControl = writeControl
 function M.controlsOf(selfObj)
     return setmetatable({}, {
         __index = function(_, k)
-            local f = CONTROLS[k]
-            if not f then
-                rt.warnOnce("controls." .. tostring(k), "self.controls.%s is not supported by omwcompat %s", tostring(k), rt.VERSION)
-                return nil
-            end
             local mob = mobileOf(selfObj)
-            local ok, v = pcall(function() return mob and mob[f] end)
-            return ok and v == true or false
+            local function flag(f)
+                local ok, v = pcall(function() return mob and mob[f] end)
+                return ok and v == true
+            end
+            local f = CONTROL_READ[k]
+            if f then return flag(f) end
+            if k == "movement" then return flag("isMovingForward") and 1 or (flag("isMovingBack") and -1 or 0) end
+            if k == "sideMovement" then return flag("isMovingRight") and 1 or (flag("isMovingLeft") and -1 or 0) end
+            if k == "yawChange" or k == "pitchChange" then return 0 end
+            rt.warnOnce("controls." .. tostring(k), "self.controls.%s is not supported by omwcompat %s", tostring(k), rt.VERSION)
+            return nil
         end,
-        __newindex = function(_, k)
-            rt.warnOnce("controls.set." .. tostring(k),
-                "self.controls.%s cannot be set: movement controls are not emulated by omwcompat %s (the write is ignored; further writes are counted, not logged)",
-                tostring(k), rt.VERSION)
+        __newindex = function(_, k, v)
+            local ok, err = pcall(writeControl, selfObj, k, v)
+            if not ok then ignoredWrite(k, tostring(err)) end
         end,
     })
 end
@@ -818,36 +891,288 @@ function M.aiInterface(getSelf)
     return AI
 end
 
----------------------------------------------------------------- animations (0.4.2)
--- Animations are not ported: MWSE plays keyframe files a different way and OpenMW's animation
--- blending has no MWSE counterpart. openmw.animation and I.AnimationController are still there,
--- so a mod that plays a gesture or listens for a text key keeps running: every call does nothing
--- and answers like an actor whose animation is not playing (isPlaying false, times nil, no text
--- keys ever fire). The first call of each mod is logged once; later calls are only counted
--- (M.animCalls[mod][name]).
+---------------------------------------------------------------- animations (0.4.2 stubs, 0.5.0 mapping)
+-- Since 0.5.0 the simple calls are mapped to MWSE; everything else is still a quiet no-op.
+--   playBlended / playQueued / I.AnimationController.playBlendedAnimation
+--       -> tes3.playAnimation, only for a vanilla group name (tes3.animationGroup, OpenMW's
+--          lower-case names such as "idle2", "hit1", "walkforwardhh") that the actor has, with
+--          the default start/stop keys. Priority Scripted (NPC/creature) plays on the whole
+--          body ("group", the AI pauses as for a PlayGroup); other priorities, and anything on
+--          the player, are layered on the body sections of the blend mask (lower/upper/shield;
+--          the AI keeps control). loops -> loopCount (playQueued default: infinite). speed,
+--          priority tables, startPoint and autoDisable are ignored. A playQueued right after
+--          clearAnimationQueue starts immediately, otherwise after the current group.
+--   hasAnimation / hasGroup / isPlaying / getActiveGroup / getCurrentTime
+--       -> reference.animationData (animationGroups, currentAnimGroups, timings)
+--   cancel / clearAnimationQueue(actor, true) -> back to the AI (tes3.playAnimation group 0),
+--       only for a group omwcompat started; animations the engine plays are never cancelled
+--   setLoopingEnabled(actor, group, false) -> tes3.cancelAnimationLoop
+--   skipAnimationThisFrame -> tes3.skipAnimationFrame
+--   I.AnimationController handlers: playBlendedAnimation handlers run for calls made through
+--       omwcompat (newest first, false stops the chain, options.skip skips the play); text key
+--       handlers get "start" when MWSE's playGroup event starts the group on the actor and
+--       "stop" when a group omwcompat started ends; animationEnded handlers run when a group
+--       omwcompat started ends. Other text keys ("hit", "attach", ...) never fire.
+-- Unknown group names, custom start/stop keys and every other function (getTextKeyTime,
+-- getCompletion, getLoopCount, getSpeed, setSpeed, hasBone, isLoopingAnimation, addGlow,
+-- addVfx, removeVfx, removeAllVfx, newer API names) do nothing and answer "not playing"/nil.
+-- Nothing here raises: a failing MWSE call is logged once and the call is skipped. The first
+-- no-op call of each mod logs one warning and the first mapped call one note, both in the
+-- library log; later calls are only counted (M.animCalls[mod][name]).
 M.animCalls = {}
-local ANIM_FALSE = { hasAnimation = true, isPlaying = true, isLoopingAnimation = true, hasGroup = true, hasBone = true }
-local ANIM_NIL = { getTextKeyTime = true, getCurrentTime = true, getCompletion = true, getLoopCount = true,
-    getSpeed = true, getActiveGroup = true }
-local ANIM_NOOP = { skipAnimationThisFrame = true, cancel = true, setLoopingEnabled = true, setSpeed = true,
-    clearAnimationQueue = true, playQueued = true, playBlended = true, addGlow = true, addVfx = true,
-    removeVfx = true, removeAllVfx = true }
 local ANIM_CONST = {
     PRIORITY = { Default = 0, WeaponLowerBody = 1, SneakIdleLowerBody = 2, SwimIdle = 3, Jump = 4, Movement = 5,
         Hit = 6, Weapon = 7, Block = 8, Knockdown = 9, Torch = 10, Storm = 11, Death = 12, Scripted = 13 },
     BLEND_MASK = { LowerBody = 1, Torso = 2, LeftArm = 4, RightArm = 8, UpperBody = 14, All = 15 },
     BONE_GROUP = { LowerBody = 1, Torso = 2, LeftArm = 3, RightArm = 4 },
 }
+local SCRIPTED = 13
+-- stubs that stay: answer like an actor whose animation is not playing
+local ANIM_FALSE = { isLoopingAnimation = true, hasBone = true }
+local ANIM_NIL = { getTextKeyTime = true, getCompletion = true, getLoopCount = true, getSpeed = true }
+local ANIM_NOOP = { setSpeed = true, addGlow = true, addVfx = true, removeVfx = true, removeAllVfx = true }
 
-local function animNote(modName, what)
+local function bump(modName, what)
     local c = M.animCalls[modName]
     if not c then c = {}; M.animCalls[modName] = c end
     c[what] = (c[what] or 0) + 1
+end
+local function animNote(modName, what, why)
+    bump(modName, what)
     rt.warnOnce("animation " .. modName,
-        "%s: %s does nothing: animations are not ported by omwcompat %s (openmw.animation and I.AnimationController calls are skipped; further calls are counted, not logged)",
-        modName, what, rt.VERSION)
+        "%s: %s does nothing%s: omwcompat %s maps only simple vanilla-group calls to MWSE (unmapped openmw.animation and I.AnimationController calls are skipped; further calls are counted, not logged)",
+        modName, what, why and (" (" .. why .. ")") or "", rt.VERSION)
 end
 M.animNote = animNote
+local mappedNoted = {}
+local function animMapped(modName, what)
+    bump(modName, what)
+    if mappedNoted[modName] then return end
+    mappedNoted[modName] = true
+    rt.note("[omwcompat] %s: %s is played through MWSE (tes3.playAnimation); omwcompat %s maps vanilla animation groups only, speed and blending are not emulated",
+        modName, what, rt.VERSION)
+end
+local function mwseFailed(what, err)
+    rt.warnOnce("animation mwse " .. what, "openmw.animation: MWSE refused %s (%s); the call was skipped", what, tostring(err))
+end
+
+-- OpenMW group name (lower case) <-> tes3.animationGroup id. MWSE spells the hand-to-hand
+-- movement/idle groups "...HandToHand"; their NIF/OpenMW names end in "hh" (idlehh, jumphh).
+local groupIds, groupNames
+local function buildGroups()
+    if groupIds then return end
+    groupIds, groupNames = {}, {}
+    local G = tes3 and tes3.animationGroup
+    if type(G) ~= "table" then return end
+    for k, id in pairs(G) do
+        if type(k) == "string" and type(id) == "number" then
+            local low = k:lower()
+            local pre = low:match("^(.-)handtohand$")
+            local name = low
+            if pre and pre ~= "" and pre ~= "inventory" then name = pre .. "hh" end
+            groupIds[name] = id
+            if name ~= low then groupIds[low] = groupIds[low] or id end
+            groupNames[id] = name
+        end
+    end
+end
+local function groupIdOf(name)
+    if type(name) ~= "string" then return nil end
+    buildGroups()
+    return groupIds[name:lower()]
+end
+M.groupIdOf = groupIdOf
+local function groupNameOf(id)
+    buildGroups()
+    return id and groupNames[id] or nil
+end
+M.groupNameOf = groupNameOf
+
+local function animRef(actor)
+    local ok, ref = pcall(objects.refOf, actor)
+    if not ok or not ref or ref.deleted then return nil end
+    return ref
+end
+local function animData(ref)
+    if not ref then return nil end
+    local ok, ad = pcall(function() return ref.animationData end)
+    if ok and ad then return ad end
+    ok, ad = pcall(function() return ref.attachments and ref.attachments.animation end)
+    return ok and ad or nil
+end
+local function hasGroupId(ad, id)
+    local ok, v = pcall(function() return ad.animationGroups[id + 1] end)
+    return ok and v ~= nil
+end
+local function currentGroups(ad)
+    local ok, cur = pcall(function()
+        local c = ad.currentAnimGroups
+        return { c[1], c[2], c[3] }
+    end)
+    return ok and cur or {}
+end
+-- body sections (1 lower, 2 upper, 3 shield arm) where group id is current
+local function sectionOf(ad, id)
+    local cur = currentGroups(ad)
+    for i = 1, 3 do if cur[i] == id then return i end end
+    return nil
+end
+
+-- plays omwcompat started (polled for the "stop" text key and animationEnded):
+-- plays[ref] = { id, name, sections, seen, frames, startKey, stopKey }
+local plays = setmetatable({}, { __mode = "k" })
+M._plays = plays
+local controllers = setmetatable({}, { __mode = "k" })   -- controller -> true (has handlers)
+local queueCleared = setmetatable({}, { __mode = "k" })  -- ref -> frame of clearAnimationQueue
+
+local function isPlayerRef(ref) return tes3 and ref == tes3.player end
+local NPC_OT
+local function isActorRef(ref)
+    local ot = ref and ref.object and ref.object.objectType
+    NPC_OT = NPC_OT or tes3.objectType
+    return ot == NPC_OT.npc or ot == NPC_OT.creature
+end
+
+local function callHandlers(list, where, ...)
+    if not list then return end
+    for i = #list, 1, -1 do
+        local ok, r = rt.safecall(where, list[i], ...)
+        if ok and r == false then return end
+    end
+end
+local function forEachController(ref, fn)
+    for c in pairs(controllers) do
+        local S = c._script
+        if not (S and S.dead) then
+            local ok, self = pcall(c._getSelf)
+            if ok and self and animRef(self) == ref then fn(c) end
+        end
+    end
+end
+local function fireTextKey(ref, name, key)
+    forEachController(ref, function(c)
+        callHandlers(c._textKeys[name], c._mod .. " text key handler", name, key)
+        if name ~= "" then callHandlers(c._textKeys[""], c._mod .. " text key handler", name, key) end
+    end)
+end
+local function fireEnded(ref, p)
+    forEachController(ref, function(c)
+        callHandlers(c._ended, c._mod .. " animationEnded handler", p.name,
+            { startKey = p.startKey, stopKey = p.stopKey, time = nil, completion = 1 })
+    end)
+end
+
+-- playGroup (MWSE): the "start" text key of the group, once per actor, group and frame
+local playGroupWired, lastStart = false, setmetatable({}, { __mode = "k" })
+function M.onPlayGroup(e)
+    local ref = e and e.reference
+    if not ref or not next(controllers) then return end
+    local name = groupNameOf(e.group)
+    if not name then return end
+    local frame = rt._state and rt._state.frame or 0
+    local l = lastStart[ref]
+    if l and l.frame == frame and l.name == name then return end
+    lastStart[ref] = { frame = frame, name = name }
+    fireTextKey(ref, name, "start")
+end
+local function wirePlayGroup()
+    if playGroupWired then return end
+    playGroupWired = true
+    local ev = tes3 and tes3.event and tes3.event.playGroup or "playGroup"
+    pcall(event.register, ev, M.onPlayGroup)
+end
+
+-- once per frame (runtime frameWork): a group omwcompat started that is no longer current has
+-- ended; one that never showed up within 10 frames is forgotten without a call.
+function M.animTick()
+    if not next(plays) then return end
+    for ref, p in pairs(plays) do
+        local ad = (not ref.deleted) and animData(ref) or nil
+        if not ad then
+            plays[ref] = nil
+        else
+            local cur, on = currentGroups(ad), false
+            for _, s in ipairs(p.sections) do if cur[s] == p.id then on = true end end
+            if on then
+                p.seen = true
+            elseif p.seen then
+                plays[ref] = nil
+                fireTextKey(ref, p.name, "stop")
+                fireEnded(ref, p)
+            else
+                p.frames = p.frames + 1
+                if p.frames >= 10 then plays[ref] = nil end
+            end
+        end
+    end
+end
+
+local BIG_LOOPS = 1e6
+local function loopCountOf(loops, default)
+    if type(loops) ~= "number" then return default end
+    if loops >= BIG_LOOPS or loops ~= loops then return -1 end
+    if loops < 0 then return 0 end
+    return math.floor(loops)
+end
+local function priorityOf(o)
+    local p = o and o.priority
+    if type(p) == "number" then return p end
+    if type(p) == "table" then
+        for _, v in pairs(p) do if v == SCRIPTED then return SCRIPTED end end
+        return 0
+    end
+    return 0
+end
+
+-- shared by playBlended / playQueued: returns true when MWSE was asked to play
+local function play(modName, what, actor, groupName, o, queued)
+    o = type(o) == "table" and o or {}
+    local ref = animRef(actor)
+    local ad = animData(ref)
+    if not ad then animNote(modName, what, "no animated actor"); return false end
+    local id = groupIdOf(groupName)
+    if not id then animNote(modName, what, "group " .. tostring(groupName) .. " is not a vanilla group"); return false end
+    if not hasGroupId(ad, id) then animNote(modName, what, "the actor has no " .. tostring(groupName) .. " group"); return false end
+    local sk, ek = o.startKey or "start", o.stopKey or "stop"
+    if sk ~= "start" or ek ~= "stop" then
+        animNote(modName, what, "custom start/stop keys " .. tostring(sk) .. "/" .. tostring(ek)); return false
+    end
+    local params = { reference = ref }
+    local sections
+    local frame = rt._state and rt._state.frame or 0
+    if queued then
+        params.group = id
+        params.loopCount = loopCountOf(o.loops, -1)
+        params.startFlag = queueCleared[ref] == frame and 1 or 0
+        sections = { 1, 2, 3 }
+    else
+        params.loopCount = loopCountOf(o.loops, 0)
+        params.startFlag = 1
+        if priorityOf(o) == SCRIPTED and isActorRef(ref) and not isPlayerRef(ref) then
+            params.group = id
+            sections = { 1, 2, 3 }
+        else
+            local mask = type(o.blendMask) == "number" and o.blendMask or 15
+            sections = {}
+            if mask % 2 == 1 then params.lower = id; sections[#sections + 1] = 1 end
+            if math.floor(mask / 2) % 2 == 1 or math.floor(mask / 8) % 2 == 1 then params.upper = id; sections[#sections + 1] = 2 end
+            if math.floor(mask / 4) % 2 == 1 then params.shield = id; sections[#sections + 1] = 3 end
+            if #sections == 0 then animNote(modName, what, "empty blend mask"); return false end
+        end
+    end
+    local ok, err = pcall(tes3.playAnimation, params)
+    if not ok then mwseFailed("tes3.playAnimation", err); return false end
+    animMapped(modName, what)
+    plays[ref] = { id = id, name = groupNameOf(id) or tostring(groupName):lower(), sections = sections,
+        seen = false, frames = 0, startKey = sk, stopKey = ek }
+    return true
+end
+
+local function backToAI(ref)
+    local ok, err = pcall(tes3.playAnimation, { reference = ref, group = 0, startFlag = 1 })
+    if not ok then mwseFailed("tes3.playAnimation", err) end
+    plays[ref] = nil
+end
 
 -- openmw.animation for one mod's script
 function M.animationModule(modName)
@@ -860,6 +1185,75 @@ function M.animationModule(modName)
     for k in pairs(ANIM_FALSE) do A[k] = function() animNote(modName, "openmw.animation." .. k); return false end end
     for k in pairs(ANIM_NIL) do A[k] = function() animNote(modName, "openmw.animation." .. k); return nil end end
     for k in pairs(ANIM_NOOP) do A[k] = function() animNote(modName, "openmw.animation." .. k) end end
+
+    function A.hasAnimation(actor)
+        bump(modName, "openmw.animation.hasAnimation")
+        return animData(animRef(actor)) ~= nil
+    end
+    function A.hasGroup(actor, groupName)
+        bump(modName, "openmw.animation.hasGroup")
+        local ad, id = animData(animRef(actor)), groupIdOf(groupName)
+        return ad ~= nil and id ~= nil and hasGroupId(ad, id)
+    end
+    function A.isPlaying(actor, groupName)
+        bump(modName, "openmw.animation.isPlaying")
+        local ad, id = animData(animRef(actor)), groupIdOf(groupName)
+        return ad ~= nil and id ~= nil and sectionOf(ad, id) ~= nil
+    end
+    -- BONE_GROUP LowerBody -> lower section, Torso / RightArm -> upper, LeftArm -> shield arm
+    local BONE_SECTION = { [1] = 1, [2] = 2, [3] = 3, [4] = 2 }
+    function A.getActiveGroup(actor, boneGroup)
+        bump(modName, "openmw.animation.getActiveGroup")
+        local ad = animData(animRef(actor))
+        local s = BONE_SECTION[boneGroup]
+        if not ad or not s then return nil end
+        return groupNameOf(currentGroups(ad)[s])
+    end
+    function A.getCurrentTime(actor, groupName)
+        bump(modName, "openmw.animation.getCurrentTime")
+        local ad, id = animData(animRef(actor)), groupIdOf(groupName)
+        local s = ad and id and sectionOf(ad, id)
+        if not s then return nil end
+        local ok, t = pcall(function() return ad.timings[s] end)
+        return ok and type(t) == "number" and t or nil
+    end
+    function A.playBlended(actor, groupName, o)
+        play(modName, "openmw.animation.playBlended", actor, groupName, o, false)
+    end
+    function A.playQueued(actor, groupName, o)
+        play(modName, "openmw.animation.playQueued", actor, groupName, o, true)
+    end
+    function A.clearAnimationQueue(actor, clearScripted)
+        bump(modName, "openmw.animation.clearAnimationQueue")
+        local ref = animRef(actor)
+        if not ref then return end
+        queueCleared[ref] = rt._state and rt._state.frame or 0
+        if clearScripted and plays[ref] then backToAI(ref) end
+    end
+    function A.cancel(actor, groupName)
+        bump(modName, "openmw.animation.cancel")
+        local ref = animRef(actor)
+        local p = ref and plays[ref]
+        local id = groupIdOf(groupName)
+        if p and id and p.id == id then backToAI(ref) end
+    end
+    function A.setLoopingEnabled(actor, groupName, enabled)
+        bump(modName, "openmw.animation.setLoopingEnabled")
+        if enabled ~= false then return end
+        local ref = animRef(actor)
+        local ad, id = animData(ref), groupIdOf(groupName)
+        if ad and id and sectionOf(ad, id) then
+            local ok, err = pcall(tes3.cancelAnimationLoop, { reference = ref })
+            if not ok then mwseFailed("tes3.cancelAnimationLoop", err) end
+        end
+    end
+    function A.skipAnimationThisFrame(actor)
+        bump(modName, "openmw.animation.skipAnimationThisFrame")
+        local ref = animRef(actor)
+        if not animData(ref) then return end
+        local ok, err = pcall(tes3.skipAnimationFrame, { reference = ref })
+        if not ok then mwseFailed("tes3.skipAnimationFrame", err) end
+    end
     return setmetatable(A, {
         -- a name this list does not know (a newer API): a no-op function, logged once
         __index = function(_, k)
@@ -869,16 +1263,42 @@ function M.animationModule(modName)
     })
 end
 
--- I.AnimationController (actor local scripts): the handlers are accepted and never called
-function M.animationControllerInterface(modName)
-    local function noop(name) return function() animNote(modName, "I.AnimationController." .. name) end end
-    return {
-        version = 1,
-        playBlendedAnimation = noop("playBlendedAnimation"),
-        addPlayBlendedAnimationHandler = noop("addPlayBlendedAnimationHandler"),
-        addAnimationEndedHandler = noop("addAnimationEndedHandler"),
-        addTextKeyHandler = noop("addTextKeyHandler"),
-    }
+-- I.AnimationController (actor local scripts), version 1
+function M.animationControllerInterface(modName, getSelf, S)
+    local A = M.animationModule(modName)
+    local c = { _mod = modName, _getSelf = getSelf or function() return nil end, _script = S,
+        _playHandlers = {}, _ended = {}, _textKeys = {} }
+    local I = { version = 1 }
+    function I.playBlendedAnimation(groupName, o)
+        o = type(o) == "table" and o or {}
+        callHandlers(c._playHandlers, modName .. " playBlendedAnimation handler", groupName, o)
+        if o.skip then return end
+        local self = c._getSelf()
+        if self == nil then animNote(modName, "I.AnimationController.playBlendedAnimation", "no actor"); return end
+        play(modName, "I.AnimationController.playBlendedAnimation", self, groupName, o, false)
+    end
+    function I.addPlayBlendedAnimationHandler(fn)
+        bump(modName, "I.AnimationController.addPlayBlendedAnimationHandler")
+        if type(fn) ~= "function" then return end
+        c._playHandlers[#c._playHandlers + 1] = fn
+    end
+    function I.addAnimationEndedHandler(fn)
+        bump(modName, "I.AnimationController.addAnimationEndedHandler")
+        if type(fn) ~= "function" then return end
+        c._ended[#c._ended + 1] = fn
+        controllers[c] = true
+    end
+    function I.addTextKeyHandler(groupName, fn)
+        bump(modName, "I.AnimationController.addTextKeyHandler")
+        if type(fn) ~= "function" then return end
+        local g = type(groupName) == "string" and groupName:lower() or ""
+        local l = c._textKeys[g]
+        if not l then l = {}; c._textKeys[g] = l end
+        l[#l + 1] = fn
+        controllers[c] = true
+        wirePlayGroup()
+    end
+    return I
 end
 
 return M
