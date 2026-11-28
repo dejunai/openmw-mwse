@@ -152,6 +152,13 @@ v0.4.1), then PATH. The build is reproducible: same JSON and tes3conv, same byte
 tes3conv 0.4.1; the Windows build should match, `--check` verifies reproducibility and a round trip on whichever
 build you use). Edit the JSON, not the .esp.
 
+## Packaging
+
+`scripts/package-smoketest.sh [--tes3conv EXE | --conflict-tools DIR]` writes, to `dist-archives/`:
+`mwsuite - OpenMW - Smoke Test <version>.7z` (the mod only) and `mwsuite - OpenMW - Smoke Test DEV cell <version>.7z`
+(`OMWC_SmokeTest_DEV.esp` only, dev-only), both with the Data Files contents at the archive root (Vortex layout),
+reproducible byte for byte, plus `SHA256SUMS-smoketest.txt`.
+
 ## The hooks it needs in omwcompat (`omwcompat/diag.lua`, 0.4.5)
 
 `omwcompat.diag`: `inspect()`, `compileCheck`, `readSettings`, `capture`, `probeStubs`, `roundTrips`,
