@@ -212,6 +212,21 @@ bin/omw2mwse scan path/to/mod --no-openmw             # scan without the catalog
   the file cannot be opened. `tests/lua/test_versions.lua` covers the `note` hook and the
   older-runtime fallback.
 
+## omwcompat 0.4.5: diagnostics hooks and the smoke test mod
+
+- **Why.** An optional in-game self check (`omwcompat_smoketest`) needs to look inside the runtime
+  without changing it. See [SMOKETEST.md](SMOKETEST.md).
+- **Where.** `omwcompat/diag.lua` (`RT.diag`): `inspect`, `compileCheck`, `readSettings`, `capture`,
+  `probeStubs`, `roundTrips`, `payloadCheck`; `runtime.lua` has a capture list in `writeLib` /
+  `warnOnce` and `RT._setCapture`. Probes must never leave state behind: `capture` restores error
+  counts, sound gate counters and `actors.animCalls`.
+- **Mod.** `smoketest/MWSE/mods/mwsuite/openmw/omwcompat_smoketest/` (`checks.lua` pure checks,
+  `runner.lua` report writer, `fixtures.lua` dev test cell, `main.lua` events and MCM).
+- **Plugin.** `smoketest/esp/omwc_smoketest.esp.json` -> `scripts/build-smoketest-esp.py` (tes3conv).
+- **Tests.** `tests/lua/test_smoketest.lua`, `tests/py/test_smoketest_esp.py`; the mock gained
+  `event.unregister/isRegistered`, `createKeyBinder`, `createTableVariable`, `tes3.getPlayerCell`
+  and the `saved` event.
+
 ## Further reading
 
 - [RUNTIME.md](RUNTIME.md): how the emulation works, local scripts, object-lifecycle rules.

@@ -52,7 +52,7 @@ function M.install(opts)
             end
         end
         for _, k in ipairs({ "createSideBarPage", "createPage", "createCategory", "createOnOffButton", "createYesNoButton",
-            "createSlider", "createTextField", "createDropdown", "createInfo", "createButton" }) do
+            "createSlider", "createTextField", "createDropdown", "createInfo", "createButton", "createKeyBinder" }) do
             c[k] = add(k:sub(7))
         end
         return c
@@ -64,6 +64,9 @@ function M.install(opts)
         return tpl
     end
     mwse.mcm.register = function(tpl) tpl:register() end
+    mwse.mcm.createTableVariable = function(t)
+        return { id = t.id, getter = function() return t.table[t.id] end, setter = function(_, v) t.table[t.id] = v end }
+    end
     mwse.mcm.createCustom = function(t) return { getter = t.getter, setter = t.setter, numbersOnly = t.numbersOnly } end
     -- walk all value components of a template
     function M.mcmControls(tpl)
@@ -215,7 +218,7 @@ function M.install(opts)
 
     local ev = {}
     for _, n in ipairs({ "initialized", "loaded", "save", "enterFrame", "activate", "referenceActivated", "referenceDeactivated",
-        "cellChanged", "simulate", "modConfigReady", "load", "keyDown", "keyUp", "journal", "addSound" }) do ev[n] = n end
+        "cellChanged", "simulate", "modConfigReady", "load", "keyDown", "keyUp", "journal", "addSound", "saved" }) do ev[n] = n end
     _G.tes3 = {
         objectType = OT,
         weather = { clear = 0, cloudy = 1, foggy = 2, overcast = 3, rain = 4, thunder = 5, ash = 6, blight = 7, snow = 8, blizzard = 9 },
@@ -230,6 +233,7 @@ function M.install(opts)
             return function() i = i + 1; return list[i] end
         end,
         getActiveCells = function() return { W.activeCell } end,
+        getPlayerCell = function() return W.activeCell end,
         getCell = function(p)
             for _, c in ipairs(W.cells) do
                 if p.id and c.id:lower() == p.id:lower() then return c end
@@ -403,7 +407,16 @@ function M.install(opts)
             table.insert(W.handlers[name], { fn = fn, priority = o and o.priority or 0, filter = o and o.filter })
             sortH(name)
         end,
-        unregister = function() end,
+        unregister = function(name, fn)
+            local list = W.handlers[name] or {}
+            for i = #list, 1, -1 do
+                if list[i].fn == fn then table.remove(list, i); break end
+            end
+        end,
+        isRegistered = function(name, fn)
+            for _, h in ipairs(W.handlers[name] or {}) do if h.fn == fn then return true end end
+            return false
+        end,
     }
     function M.fire(name, e)
         e = e or {}

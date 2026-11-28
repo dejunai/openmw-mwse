@@ -217,6 +217,20 @@ All converted mods share one Mod Config Menu entry, **MW Conversions**:
   needed. It does not undo what the mod already changed in your game. The choice
   applies to all your saves.
 
+## Optional: the in-game smoke test
+
+`omwcompat_smoketest` is a small, **off by default** MWSE mod that checks your conversions from
+inside the game: it confirms each converted mod's scripts started and are running, that the
+animation, movement-control and sound-gate stand-ins answer without errors, that settings and
+save data store and read back correctly, and (for Leave The Lights Off) that the lights follow
+the day. It writes a PASS / FAIL / SKIP report to `Data Files\MWSE\logs\omwcompat.log` (lines
+starting `[smoketest]`) and nothing to MWSE.log. It never changes the game world or your saves.
+
+To use it: install it, then in the Mod Config Menu open **OpenMW Smoke Test**, switch **Enabled** on,
+load a save and play for twenty seconds; or press **Run the smoke test now**, or Ctrl+Shift+F10.
+It needs omwcompat 0.4.5 or later. Details, what each line means and the optional developer test
+cell: [docs/SMOKETEST.md](docs/SMOKETEST.md).
+
 ## Standalone use
 
 From a checkout, with Python 3.9+:
