@@ -218,7 +218,8 @@ function M.install(opts)
 
     local ev = {}
     for _, n in ipairs({ "initialized", "loaded", "save", "enterFrame", "activate", "referenceActivated", "referenceDeactivated",
-        "cellChanged", "simulate", "modConfigReady", "load", "keyDown", "keyUp", "journal", "addSound", "saved" }) do ev[n] = n end
+        "cellChanged", "simulate", "modConfigReady", "load", "keyDown", "keyUp", "journal", "addSound", "saved", "mobileActivated", "weatherChangedImmediate", "weatherTransitionStarted",
+        "weatherTransitionFinished", "weatherCycled" }) do ev[n] = n end
     _G.tes3 = {
         objectType = OT,
         weather = { clear = 0, cloudy = 1, foggy = 2, overcast = 3, rain = 4, thunder = 5, ash = 6, blight = 7, snow = 8, blizzard = 9 },

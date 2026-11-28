@@ -76,6 +76,14 @@ local function onSaved() fixtures.onSaved(config.enabled) end
 local function onActivate(e)
     if fixtures.onActivate(e, goBack) then return false end
 end
+local function onFixtureFrame(e) fixtures.tick(e, config.enabled) end
+local function onMobileActivated(e) fixtures.onMobileActivated(e) end
+-- extra handlers, registered with the others while the mod is enabled: key -> { event, handler }
+local WEATHER_EVENTS = { "weatherChangedImmediate", "weatherTransitionStarted", "weatherTransitionFinished", "weatherCycled" }
+local extra = { fixtureFrame = { "enterFrame", onFixtureFrame }, mobileActivated = { "mobileActivated", onMobileActivated } }
+for _, name in ipairs(WEATHER_EVENTS) do
+    extra["wx_" .. name] = { name, function() fixtures.onWeather(name, config.enabled) end }
+end
 
 -- handlers exist only while the mod is enabled (when it is switched off the fixtures are removed)
 local function apply()
@@ -86,6 +94,9 @@ local function apply()
         if not registered.save then registered.save = onSave; event.register(tes3.event.save, onSave) end
         if not registered.saved then registered.saved = onSaved; event.register(tes3.event.saved, onSaved) end
         if not registered.activate then registered.activate = onActivate; event.register(tes3.event.activate, onActivate) end
+        for key, x in pairs(extra) do
+            if not registered[key] and tes3.event[x[1]] then registered[key] = x[2]; event.register(tes3.event[x[1]], x[2]) end
+        end
     else
         pending = nil
         if tes3.player and #fixtures.spawned > 0 then fixtures.onLeave() end
@@ -95,6 +106,9 @@ local function apply()
                 event.unregister(tes3.event[name], fn)
                 registered[name] = nil
             end
+        end
+        for key, x in pairs(extra) do
+            if registered[key] then event.unregister(tes3.event[x[1]], x[2]); registered[key] = nil end
         end
     end
 end

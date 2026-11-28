@@ -117,10 +117,21 @@ robe and shield base records. In the cell, while the mod is **enabled**, the mod
 |---|---|
 | 3 lanterns / streetlight (ids contain `lantern`, `streetlight`; LTLO has off models for these meshes) | Leave The Lights Off |
 | a torch and a firepit (ids contain `torch`, `firepit`) | No Fires in Bad Weather |
-| a thief NPC | Thieves Pickpocket |
-| a mage NPC | Mage Robes |
-| vanilla `rat`, next to the thief | Wildlife Attacks NPCs Too |
+| a thief NPC (common shirt, pants, shoes) | Thieves Pickpocket |
+| a mage NPC (common shirt, pants, shoes and a robe) | Mage Robes |
+| vanilla `rat` next to the thief and vanilla `kwama forager` next to the mage | Wildlife Attacks NPCs Too |
 | a robe and a shield on the floor | Mage Robes, Shield Unequipper |
+
+The two creatures are on that mod's list (`rat`, `kwama forager`; crabs and ducks are not, and never fight
+in vanilla) and weak (a few points of damage). They are armed when they appear (fight 100, so the mod's
+reach of (fight - 80) * 200 = 4000 units covers the cell), because passive-wildlife mods change the vanilla
+values. They attack the player too.
+
+**Cell data (0.1.2).** The cell has a region (`Ascadian Isles Region`: vanilla, with clear, cloudy, foggy,
+overcast, rain and thunder, so weather follows something and mods that read `cell.region` without a nil guard
+get one), a fog density of 0.3 (the build refuses less than 0.01) and its water height at -4096 (the 0.1.1
+cell stood waist deep in water at 0: a cell that behaves like an exterior draws water at that height even
+without the "has water" flag). `build-smoketest-esp.py` enforces all three.
 
 Levers (activate with the normal key): **+1 hour** (`Smoke test: time +1 hour`), **next 06:00 /
 12:00 / 18:00 / 00:00** (`Smoke: skip to 06:00`), **next weather**, **previous weather** (all ten,
@@ -135,6 +146,18 @@ weather is put back to what it was when you entered. Two things do persist, on p
 the **game hour** only moves forward (a rewound clock would confuse the converted mods' timers; past
 midnight the day counter advances too), and **records** a conversion generated (LTLO's off-copy light
 records) stay in the save, unused.
+
+**Self-healing fixtures (0.1.2).** Converted mods delete, tombstone and replace references here, and a
+save can lose its `saved` event, so a census runs on every weather event (`weatherChangedImmediate`,
+`weatherTransitionStarted`, `weatherTransitionFinished`, `weatherCycled`) and every 1.5 s of unpaused play
+while you are in the cell. A fixture counts as present while any live reference of its record exists, enabled
+or not (No Fires in Bad Weather disabling a torch in rain is its job). When one has no live reference left
+the cell is refilled, at most three times a minute; then it stops and logs why (the respawn lever resets
+that). If `save` took the fixtures out and `saved` does not come within 3 s they are put back. Every spawn,
+census that found something missing, heal, and a report four seconds after each refill (each fixture's state, the
+creatures' fight value) goes to the library log as `[smoketest cell] ...`, never to MWSE.log.
+`scripts/smoke_logscan.py LOG...` sorts a set of logs from a run (which file is which, the smoke results, the
+fixture lines, errors split into ours / caused by the cell / other, memory hints) with personal paths shortened.
 
 Teleporting: MCM **Go to the test cell** remembers where you were (in memory and in the mod's config, so
 it works after a reload), **Return** or the exit door brings you back; `coc "OMWC Smoke Test"` also

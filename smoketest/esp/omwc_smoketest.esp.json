@@ -226,7 +226,20 @@
   "name": "Smoke Test Thief",
   "script": "",
   "mesh": "base_anim_female.nif",
-  "inventory": [],
+  "inventory": [
+   [
+    1,
+    "common_shirt_02"
+   ],
+   [
+    1,
+    "common_pants_02"
+   ],
+   [
+    1,
+    "common_shoes_01"
+   ]
+  ],
   "spells": [],
   "ai_data": {
    "hello": 30,
@@ -319,7 +332,24 @@
   "name": "Smoke Test Mage",
   "script": "",
   "mesh": "base_anim_female.nif",
-  "inventory": [],
+  "inventory": [
+   [
+    1,
+    "common_shirt_01"
+   ],
+   [
+    1,
+    "common_pants_01"
+   ],
+   [
+    1,
+    "common_shoes_01"
+   ],
+   [
+    1,
+    "common_robe_01"
+   ]
+  ],
   "spells": [],
   "ai_data": {
    "hello": 30,
@@ -416,7 +446,8 @@
     0
    ]
   },
-  "water_height": 0.0,
+  "region": "Ascadian Isles Region",
+  "water_height": -4096.0,
   "atmosphere_data": {
    "ambient_color": [
     110,

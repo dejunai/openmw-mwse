@@ -44,6 +44,7 @@ mock.addLight({ id = "omwc_smoke_torch", mesh = "l\\Light_Com_Torch_01.NIF", isF
 mock.addLight({ id = "omwc_smoke_firepit", mesh = "f\\furn_firepit00.nif", isFire = true })
 for _, id in ipairs({ "omwc_smoke_npc_thief", "omwc_smoke_npc_mage" }) do mock.addObject({ id = id, objectType = OT.npc }) end
 mock.addObject({ id = "rat", objectType = OT.creature })
+mock.addObject({ id = "kwama forager", objectType = OT.creature })
 mock.addObject({ id = "omwc_smoke_robe", objectType = OT.clothing })
 mock.addObject({ id = "omwc_smoke_shield", objectType = OT.armor })
 for _, id in ipairs({ "omwc_lever_time_hour", "omwc_lever_time_preset", "omwc_lever_wx_next", "omwc_lever_wx_prev",
@@ -89,7 +90,8 @@ local function refsOf(cell, pred)
 end
 local function created(cell) return refsOf(cell, function(r) return r.sourceMod == nil end) end
 local FIXIDS = { omwc_smoke_lantern_de = 1, omwc_smoke_lantern_paper = 1, omwc_smoke_streetlight = 1, omwc_smoke_torch = 1,
-    omwc_smoke_firepit = 1, omwc_smoke_npc_thief = 1, omwc_smoke_npc_mage = 1, rat = 1, omwc_smoke_robe = 1, omwc_smoke_shield = 1 }
+    omwc_smoke_firepit = 1, omwc_smoke_npc_thief = 1, omwc_smoke_npc_mage = 1, rat = 1, ["kwama forager"] = 1, omwc_smoke_robe = 1,
+    omwc_smoke_shield = 1 }
 local function fixtureRefs(cell) return refsOf(cell, function(r) return r.sourceMod == nil and FIXIDS[r.object.id] end) end
 
 -- boot omwcompat + LTLO; the smoke test is OFF (no config) ----------------------------------------
@@ -275,7 +277,7 @@ mock.setHour(12)
 -- the dev-only test cell -------------------------------------------------------------------------------
 section("test cell: Go (teleport), fixtures spawn")
 W.menuMode = false
-local FIX = 10
+local FIX = 11
 local go = findCtl("Go to the test cell")
 local startCreated = created(test)
 go.args.callback()
@@ -312,6 +314,79 @@ check(wcon.currentWeather.index == 9, "previous weather wraps: Clear -> Blizzard
 check((lastWeather.visuals or 0) >= 3, "visuals refreshed after each change")
 pull("omwc_lever_respawn")
 check(fixtureRefs(test) == FIX, "respawn replaces the fixtures, no duplicates (" .. fixtureRefs(test) .. ")")
+
+section("test cell: the fixtures heal themselves (0.1.2)")
+local mwseHealBefore = #W.logs
+local function killFix(id)
+    local n = 0
+    for _, r in ipairs(test._refs) do
+        if r.sourceMod == nil and r.object.id == id and not r._gone then r:delete(); n = n + 1 end
+    end
+    return n
+end
+local function lastLine(needle)
+    local out
+    for i, l in ipairs(mock.libLogs()) do if l:find(needle, 1, true) then out = i end end
+    return out
+end
+-- wildlife is armed when its mobile appears; nothing else is touched
+local ratRef, npcRef
+for _, r in ipairs(test._refs) do
+    if r.sourceMod == nil and r.object.id == "rat" and not r._gone then ratRef = r end
+    if r.sourceMod == nil and r.object.id == "omwc_smoke_npc_mage" and not r._gone then npcRef = r end
+end
+local ratMob, npcMob = { fight = 30 }, { fight = 30 }
+mock.fire("mobileActivated", { reference = ratRef, mobile = ratMob })
+mock.fire("mobileActivated", { reference = npcRef, mobile = npcMob })
+check(ratMob.fight == 100, "a wildlife fixture is armed (fight 100) when its mobile appears")
+check(npcMob.fight == 30, "an NPC fixture is left alone")
+-- a weather change after something removed fixtures: refill at once, and say what was missing
+killFix("omwc_smoke_torch"); killFix("omwc_smoke_firepit")
+check(fixtureRefs(test) == FIX - 2, "(two fires were deleted behind the module's back)")
+local mark = #mock.libLogs()
+mock.fire("weatherTransitionFinished", {})
+check(fixtureRefs(test) == FIX, "weather event: the missing fixtures are back (" .. fixtureRefs(test) .. ")")
+local li = lastLine("MISSING: omwc_smoke_torch, omwc_smoke_firepit")
+check(li ~= nil and li > mark, "the library log names the missing fixtures")
+check(lastLine("heal: weatherTransitionFinished") ~= nil, "... and why it refilled")
+-- periodic check, only while unpaused
+killFix("omwc_smoke_npc_thief")
+W.menuMode = true
+mock.frames(200, 1 / 60)
+check(fixtureRefs(test) == FIX - 1, "no refill while a menu is open")
+W.menuMode = false
+mock.frames(120, 1 / 60)
+check(fixtureRefs(test) == FIX, "periodic check refills within 2 s of play")
+-- a conversion disabling a fixture (No Fires in Bad Weather in rain) is not a loss
+local before = W.created or 0
+for _, r in ipairs(test._refs) do
+    if r.sourceMod == nil and r.object.id == "omwc_smoke_torch" and not r._gone then r:disable() end
+end
+mock.fire("weatherChangedImmediate", {})
+mock.frames(240, 1 / 60)
+check((W.created or 0) == before, "a disabled fixture is not refilled")
+-- a save whose 'saved' event never comes
+mock.fire("save", { filename = "lost" })
+check(created(test) == 0, "(fixtures taken out for the save)")
+mock.frames(240, 1 / 60)
+check(fixtureRefs(test) == FIX, "fixtures come back when 'saved' never arrives")
+check(lastLine("did not arrive") ~= nil, "... and the log says so")
+-- the respawn lever after everything is gone
+for id in pairs(FIXIDS) do killFix(id) end
+check(fixtureRefs(test) == 0, "(every fixture deleted)")
+pull("omwc_lever_respawn")
+check(fixtureRefs(test) == FIX, "respawn lever restores them all after a total loss, no duplicates (" .. fixtureRefs(test) .. ")")
+-- something that keeps deleting them: three refills a minute, then it stops and says so
+for i = 1, 4 do
+    killFix("omwc_smoke_torch")
+    mock.frames(100, 1 / 60)
+end
+check(fixtureRefs(test) == FIX - 1, "stops refilling after 3 times a minute")
+check(lastLine("heal skipped") ~= nil, "... and logs that something keeps removing them")
+pull("omwc_lever_respawn")
+check(fixtureRefs(test) == FIX, "the respawn lever still works and resets the limit")
+mock.setHour(12)
+
 
 section("test cell: NFiBW-style weather and LTLO night in the cell")
 mock.setWeather(4)       -- rain

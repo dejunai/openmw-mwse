@@ -4,7 +4,7 @@
 -- Verdicts: PASS, FAIL, SKIP (could not be judged now; says why). Report lines go to the
 -- omwcompat library log (Data Files/MWSE/logs/omwcompat.log), never to MWSE.log.
 -- Written for omwcompat by dej (dejunai). MIT.
-local C = { VERSION = "0.1.1" }
+local C = { VERSION = "0.1.2" }
 
 local function parseVersion(s)
     local a, b, c = tostring(s or ""):match("^(%d+)%.(%d+)%.?(%d*)")

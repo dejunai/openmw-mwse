@@ -5,7 +5,12 @@
 -- (that includes copies converted mods make in the cell).
 -- It never touches anything outside that cell. What it does change on purpose: the game hour
 -- (forward only: a rewound clock would confuse the converted mods' timers) and the weather,
--- which is put back to what it was when you entered. Written for omwcompat by dej (dejunai). MIT.
+-- which is put back to what it was when you entered.
+-- 0.1.2: the fixtures heal themselves. Converted mods delete, tombstone and replace references in this cell
+-- (LTLO, No Fires in Bad Weather), and a save can lose its 'saved' event, so a census runs on every weather
+-- change and every 1.5 s of unpaused play in the cell; when a fixture has no live reference left the cell is
+-- refilled (at most 3 times a minute). Everything is logged to the omwcompat library log, never MWSE.log.
+-- Written for omwcompat by dej (dejunai). MIT.
 local F = {}
 
 F.ESP = "OMWC_SmokeTest_DEV.esp"
@@ -23,11 +28,15 @@ F.FIXTURES = {
     -- No Fires in Bad Weather: fires (ids contain torch / firepit)
     { id = "omwc_smoke_torch", x = 180, y = 300, z = 0, tag = "nfibw" },
     { id = "omwc_smoke_firepit", x = 360, y = 300, z = 0, tag = "nfibw" },
-    -- Thieves Pickpocket and Mage Robes: NPCs
+    -- Thieves Pickpocket and Mage Robes: NPCs (dressed in the plugin: common shirt, pants, shoes; the mage a robe)
     { id = "omwc_smoke_npc_thief", x = -200, y = -250, z = 0, rot = 0, tag = "npc" },
     { id = "omwc_smoke_npc_mage", x = 200, y = -250, z = 0, rot = 0, tag = "npc" },
-    -- Wildlife Attacks NPCs Too: a vanilla creature the mod lists, next to the thief
+    -- Wildlife Attacks NPCs Too: two weak vanilla creatures the mod lists (rat, kwama forager), one next to each NPC.
+    -- Crabs and ducks are not on its list and never fight in vanilla, so they test nothing. These two are armed on
+    -- arrival (fight 100, so the mod's reach of (fight - 80) * 200 = 4000 units covers the cell) whatever a
+    -- passive-wildlife mod in the load order did to the vanilla records. Both hit for a few points at most.
     { id = "rat", x = -120, y = -250, z = 0, rot = 1.57, tag = "wildlife" },
+    { id = "kwama forager", x = 280, y = -250, z = 0, rot = 4.71, tag = "wildlife" },
     -- Mage Robes and Shield Unequipper: the items
     { id = "omwc_smoke_robe", x = -100, y = -100, z = 4, tag = "items" },
     { id = "omwc_smoke_shield", x = 100, y = -100, z = 4, tag = "items" },
@@ -40,6 +49,14 @@ F.spawned = {}        -- references this module created
 F.entry = nil         -- { weather = index } taken on entering the cell
 F.origin = nil        -- where the player came from: { cell, exterior, gridX, gridY, pos, rot }
 F.suspended = false   -- fixtures are removed for a save and come back afterwards
+F.WILDLIFE_FIGHT = 100
+F.CHECK_EVERY = 1.5   -- seconds of unpaused play between censuses while the player is in the cell
+F.MAX_HEALS = 3       -- per HEAL_WINDOW seconds; then it stops and says so (a loop would hide the real problem)
+F.HEAL_WINDOW = 60
+F.REPORT_AFTER = 4    -- seconds after a refill: one report with each fixture's state (and the creatures' fight value)
+
+local clock, sinceCheck, suspendedFor, heals, gaveUp, reportAt = 0, 0, 0, {}, false, nil
+local tags = setmetatable({}, { __mode = "k" })   -- reference -> fixture tag
 
 local function say(fmt, ...)
     if tes3.messageBox then tes3.messageBox(fmt, ...) end
@@ -61,6 +78,15 @@ function F.playerInTestCell()
     local ok, c = pcall(function() return tes3.getPlayerCell and tes3.getPlayerCell() or tes3.player.cell end)
     return ok and F.isTestCell(c)
 end
+
+------------------------------------------------------------------------ library log
+-- omwcompat's library log only (Data Files/MWSE/logs/omwcompat.log); MWSE.log gets nothing from here.
+local function note(fmt, ...)
+    local text = "[smoketest cell] " .. (select("#", ...) > 0 and string.format(fmt, ...) or fmt)
+    local ok, omwc = pcall(function() return package.loaded["omwcompat"] or require("omwcompat") end)
+    if ok and type(omwc) == "table" and omwc.note then pcall(omwc.note, "%s", text) end
+end
+F.note = note
 
 ------------------------------------------------------------------------ spawn / despawn
 local function remove(ref)
@@ -98,19 +124,157 @@ function F.purgeLeftovers()
     return #kill
 end
 
-function F.spawn()
+function F.spawn(reason)
     local cell = F.cell()
     if not cell then return 0, { "test cell not found" } end
-    F.despawn()
-    F.purgeLeftovers()
+    local before = F.despawn()
+    local purged = F.purgeLeftovers()
     local errors = {}
     for _, f in ipairs(F.FIXTURES) do
         local ok, ref = pcall(tes3.createReference, { object = f.id, cell = cell, position = { f.x, f.y, f.z },
             orientation = { 0, 0, f.rot or 0 } })
-        if ok and ref then F.spawned[#F.spawned + 1] = ref
+        if ok and ref then
+            F.spawned[#F.spawned + 1] = ref
+            tags[ref] = f.tag
         else errors[#errors + 1] = f.id .. ": " .. tostring(ref) end
     end
+    reportAt = clock + F.REPORT_AFTER
+    note("spawn (%s): %d created, %d failed; removed %d of ours and %d leftovers first", reason or "?", #F.spawned, #errors, before, purged)
+    for _, e in ipairs(errors) do note("spawn failed: %s", e) end
     return #F.spawned, errors
+end
+
+------------------------------------------------------------------------ census, heal, report
+-- A fixture is "present" while a live reference without a content file (ours, not the plugin's) exists for its id,
+-- enabled or not: a conversion that disabled or tombstoned it (No Fires in Bad Weather in rain) is doing its job.
+-- It is "missing" when nothing is left: deleted, or never created. Records are looked up lower case.
+function F.census()
+    local c = { total = #F.FIXTURES, present = 0, enabled = 0, hidden = 0, missing = {}, others = 0 }
+    local cell = F.cell()
+    if not cell then c.missing = nil; return c end
+    local byId, created = {}, 0
+    for ref in cell:iterateReferences() do
+        if ref.sourceMod == nil and not ref.deleted then
+            created = created + 1
+            local id = tostring(ref.object and ref.object.id or "?"):lower()
+            local e = byId[id]
+            if not e then e = { n = 0, on = 0 }; byId[id] = e end
+            e.n = e.n + 1
+            if not ref.disabled then e.on = e.on + 1 end
+        end
+    end
+    local counted = 0
+    for _, f in ipairs(F.FIXTURES) do
+        local e = byId[f.id:lower()]
+        if not e then c.missing[#c.missing + 1] = f.id
+        else
+            c.present = c.present + 1
+            counted = counted + e.n
+            if e.on > 0 then c.enabled = c.enabled + 1 else c.hidden = c.hidden + 1 end
+        end
+    end
+    c.others = created - counted   -- conversion copies (LTLO's off lights and so on)
+    return c
+end
+
+local function censusLine(c)
+    return string.format("%d/%d fixtures present (%d enabled, %d disabled by a conversion), %d conversion copies%s", c.present, c.total,
+        c.enabled, c.hidden, c.others, #(c.missing or {}) > 0 and (", MISSING: " .. table.concat(c.missing, ", ")) or "")
+end
+F.censusLine = censusLine
+
+local function weatherName()
+    local w = tes3.worldController and tes3.worldController.weatherController
+    local cur = w and w.currentWeather
+    return cur and (F.WEATHER[cur.index] or cur.name) or "?"
+end
+
+-- refill the cell; rate limited. Returns true when it refilled.
+function F.heal(reason)
+    local now = clock
+    local recent = {}
+    for _, t in ipairs(heals) do if now - t < F.HEAL_WINDOW then recent[#recent + 1] = t end end
+    heals = recent
+    if #heals >= F.MAX_HEALS then
+        if not gaveUp then
+            gaveUp = true
+            note("heal skipped (%s): already refilled %d times in %d s; something keeps removing the fixtures. Use the respawn lever to retry",
+                reason, #heals, F.HEAL_WINDOW)
+        end
+        return false
+    end
+    heals[#heals + 1] = now
+    local n, errs = F.spawn("heal: " .. reason)
+    say("Smoke test cell: fixtures were missing, refilled (%d%s)", n, #errs > 0 and (", " .. #errs .. " failed (see log)") or "")
+    return true
+end
+
+-- one report with the state of each fixture and, for creatures, the fight value the mod will read
+function F.report()
+    local cell = F.cell()
+    if not cell then return end
+    note("report: %s; weather %s, hour %.1f", censusLine(F.census()), weatherName(), tes3.worldController and tes3.worldController.hour.value or -1)
+    for _, ref in ipairs(F.spawned) do
+        if not ref.deleted then
+            local mob = ref.mobile
+            local extra = ""
+            if mob and tags[ref] == "wildlife" then
+                extra = string.format(", fight %s, health %s", tostring(mob.fight), tostring(mob.health and mob.health.current))
+            end
+            note("  %s: %s%s", tostring(ref.object and ref.object.id), ref.disabled and "disabled" or "enabled", extra)
+        end
+    end
+end
+
+-- weather events and the periodic check call this; `why` is only for the log
+function F.check(why, enabled)
+    if not enabled or F.suspended or not F.playerInTestCell() then return end
+    local c = F.census()
+    if c.missing == nil then return end
+    if #c.missing > 0 then
+        note("check (%s, weather %s): %s", why, weatherName(), censusLine(c))
+        F.heal(why)
+    elseif why ~= "periodic" then
+        note("check (%s, weather %s): %s", why, weatherName(), censusLine(c))
+    end
+end
+
+-- enterFrame: delta is seconds; only while unpaused
+function F.tick(e, enabled)
+    if not enabled or (e and e.menuMode) then return end
+    local dt = e and e.delta or 0
+    clock = clock + dt
+    if not F.playerInTestCell() then return end
+    if reportAt and clock >= reportAt then reportAt = nil; F.report() end
+    sinceCheck = sinceCheck + dt
+    if sinceCheck < F.CHECK_EVERY then return end
+    sinceCheck = 0
+    if F.suspended then
+        suspendedFor = suspendedFor + F.CHECK_EVERY
+        if suspendedFor >= 3 then
+            -- 'save' took the fixtures out and 'saved' never came (a failed or blocked save, another mod's handler)
+            note("the 'saved' event did not arrive within %d s of 'save'; putting the fixtures back", suspendedFor)
+            F.suspended, suspendedFor = false, 0
+            F.spawn("saved event missing")
+        end
+        return
+    end
+    F.check("periodic", enabled)
+end
+
+-- weather events: log the state, check right away
+function F.onWeather(name, enabled)
+    if not enabled or not F.playerInTestCell() then return end
+    F.check(name, enabled)
+    sinceCheck = F.CHECK_EVERY / 2   -- and once more shortly after, when the converted mods have reacted
+end
+
+-- mobileActivated: arm the wildlife fixtures so Wildlife Attacks NPCs Too has something that fights
+function F.onMobileActivated(e)
+    local ref = e and e.reference
+    if ref and tags[ref] == "wildlife" and e.mobile then
+        pcall(function() e.mobile.fight = F.WILDLIFE_FIGHT end)
+    end
 end
 
 ------------------------------------------------------------------------ time and weather (levers)
@@ -162,7 +326,8 @@ function F.pull(lever)
     elseif lever == "wxnext" then F.stepWeather(1)
     elseif lever == "wxprev" then F.stepWeather(-1)
     elseif lever == "respawn" then
-        local n, errs = F.spawn()
+        heals, gaveUp = {}, false
+        local n, errs = F.spawn("respawn lever")
         say("Smoke test cell: %d fixtures respawned%s", n, #errs > 0 and (", " .. #errs .. " failed (see log)") or "")
         return
     end
@@ -181,6 +346,7 @@ end
 
 ------------------------------------------------------------------------ entering and leaving
 function F.onEnter()
+    sinceCheck, suspendedFor, heals, gaveUp = 0, 0, {}, false
     local wcon = wc().weatherController
     if not F.entry then F.entry = { weather = wcon and wcon.currentWeather and wcon.currentWeather.index } end
 end
@@ -199,7 +365,7 @@ end
 function F.onCellChanged(e, enabled)
     if F.isTestCell(e.cell) then
         F.onEnter()
-        if enabled and #F.spawned == 0 then F.spawn() end
+        if enabled and #F.spawned == 0 then F.spawn("entered") end
     elseif F.isTestCell(e.previousCell) then
         F.onLeave()
     end
@@ -211,7 +377,7 @@ function F.onLoaded(enabled)
     F.purgeLeftovers()
     if F.playerInTestCell() then
         F.onEnter()
-        if enabled then F.spawn() end
+        if enabled then F.spawn("loaded in the cell") end
     end
 end
 
@@ -220,13 +386,14 @@ function F.onSave()
     if #F.spawned > 0 then
         F.despawn()
         F.purgeLeftovers()
-        F.suspended = true
+        F.suspended, suspendedFor = true, 0
+        note("save: fixtures taken out while the file is written")
     end
 end
 function F.onSaved(enabled)
     if F.suspended then
         F.suspended = false
-        if enabled and F.playerInTestCell() then F.spawn() end
+        if enabled and F.playerInTestCell() then F.spawn("saved") end
     end
 end
 

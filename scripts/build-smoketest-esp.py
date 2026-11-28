@@ -35,8 +35,18 @@ ESP_NAME = "OMWC_SmokeTest_DEV.esp"
 ID_LIMIT = 32            # record id (NAME) for every object we emit
 FNAM_LIMIT = 32          # display name (FNAM) for ACTI, LIGH, CLOT, ARMO, NPC, STAT, ...
 CELL_NAME_LIMIT = 64     # interior cell name (CELL NAME subrecord)
+REGION_LIMIT = 32        # region id (RGNN) in a cell
 HEADER_AUTHOR_LIMIT = 32
 HEADER_DESC_LIMIT = 256
+
+# Cell rules learned in game (omwcompat smoke test, 0.1.1 run):
+#  - every cell needs a fog density of at least MIN_FOG_DENSITY (zero fog breaks some mods and shaders);
+#  - a cell that behaves like an exterior needs a region: weather, sounds and many mods read the region
+#    without a nil guard, and with no region the weather has nothing to follow;
+#  - such a cell is drawn with water at WHGT even without the "has water" flag, so with no water wanted
+#    the height must sit far below the floor (MAX_DRY_WATER_HEIGHT or lower) instead of at 0.
+MIN_FOG_DENSITY = 0.01
+MAX_DRY_WATER_HEIGHT = -1024.0
 
 # Record types we emit (or may add later) that carry a FNAM display name.
 FNAM_TYPES = frozenset({
@@ -129,6 +139,7 @@ def validate(records):
             for ref in rec.get("references") or []:
                 if isinstance(ref, dict) and "id" in ref:
                     _overflow(errors, rec, "reference id", ref["id"], ID_LIMIT)
+            errors.extend(validate_cell(rec))
             continue
         if "id" in rec:
             _overflow(errors, rec, "id", rec["id"], ID_LIMIT)
@@ -136,6 +147,34 @@ def validate(records):
         if typ in FNAM_TYPES or "name" in rec:
             if "name" in rec:
                 _overflow(errors, rec, "name (FNAM)", rec["name"], FNAM_LIMIT)
+    return errors
+
+
+def _cell_flags(rec):
+    flags = (rec.get("data") or {}).get("flags") or ""
+    return {f.strip() for f in str(flags).split("|") if f.strip()}
+
+
+def validate_cell(rec):
+    """Return messages for cell rules (fog, region, water); see MIN_FOG_DENSITY above."""
+    errors = []
+    name = rec.get("name") or "(exterior cell)"
+    flags = _cell_flags(rec)
+    atmo = rec.get("atmosphere_data")
+    if atmo is not None or "IS_INTERIOR" in flags:
+        fog = atmo.get("fog_density") if isinstance(atmo, dict) else None
+        if not isinstance(fog, (int, float)) or isinstance(fog, bool) or fog < MIN_FOG_DENSITY:
+            errors.append("Cell %s: fog density %r is below the minimum %s (every cell needs fog)" % (name, fog, MIN_FOG_DENSITY))
+    if "BEHAVES_LIKE_EXTERIOR" in flags:
+        region = rec.get("region")
+        if not isinstance(region, str) or not region.strip():
+            errors.append("Cell %s: behaves like an exterior but has no region (mods read it without a nil guard)" % name)
+        else:
+            _overflow(errors, rec, "region", region, REGION_LIMIT)
+        wh = rec.get("water_height")
+        if "HAS_WATER" not in flags and (not isinstance(wh, (int, float)) or wh > MAX_DRY_WATER_HEIGHT):
+            errors.append("Cell %s: no water wanted, but water_height %r is above %s (it is still drawn in a cell that behaves like an exterior)"
+                          % (name, wh, MAX_DRY_WATER_HEIGHT))
     return errors
 
 

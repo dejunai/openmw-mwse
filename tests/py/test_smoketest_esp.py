@@ -65,10 +65,10 @@ class SmokeEspJson(unittest.TestCase):
 
     def test_lua_fixture_ids_exist(self):
         ids = re.findall(r'\{ id = "([^"]+)", x = ', self.lua)
-        self.assertEqual(len(ids), 10)
+        self.assertEqual(len(ids), 11)
         for i in ids:
-            if i == "rat":
-                continue   # a vanilla creature (Wildlife Attacks NPCs Too lists it by id)
+            if i in ("rat", "kwama forager"):
+                continue   # vanilla creatures (Wildlife Attacks NPCs Too lists them by id)
             self.assertIn(i, self.by_id, i)
 
     def test_lua_lever_ids_exist_as_activators(self):
@@ -88,6 +88,35 @@ class SmokeEspJson(unittest.TestCase):
     def test_robe_and_shield_have_the_right_slots(self):
         self.assertEqual(self.by_id["omwc_smoke_robe"]["data"]["clothing_type"], "Robe")
         self.assertEqual(self.by_id["omwc_smoke_shield"]["data"]["armor_type"], "Shield")
+
+    def test_cell_has_a_region_fog_and_no_visible_water(self):
+        c = [r for r in self.data if r["type"] == "Cell"][0]
+        self.assertEqual(c["region"], "Ascadian Isles Region")   # vanilla, has rain and thunder for No Fires in Bad Weather
+        self.assertGreaterEqual(c["atmosphere_data"]["fog_density"], 0.01)
+        self.assertLessEqual(c["water_height"], -1024.0)          # 0.1.1 stood waist deep in water at 0.0
+        self.assertNotIn("HAS_WATER", c["data"]["flags"])
+
+    def test_npcs_are_dressed_in_vanilla_clothes(self):
+        for i, need in (("omwc_smoke_npc_thief", 3), ("omwc_smoke_npc_mage", 4)):
+            inv = self.by_id[i]["inventory"]
+            self.assertEqual(len(inv), need, i)
+            for count, item in inv:
+                self.assertEqual(count, 1)
+                self.assertTrue(item.startswith("common_"), item)
+        mage = {item for _, item in self.by_id["omwc_smoke_npc_mage"]["inventory"]}
+        self.assertIn("common_robe_01", mage)
+        thief = {item for _, item in self.by_id["omwc_smoke_npc_thief"]["inventory"]}
+        self.assertFalse(any("robe" in i for i in thief))
+
+    def test_wildlife_fixtures_are_listed_by_wildlife_attacks_npcs_too(self):
+        src = (ROOT / "corpus" / "wildlife-attacks-npcs-too" / "_archive" / "full" / "scripts" / "wildlife_npc" / "wildlife.lua")
+        if not src.is_file():
+            self.skipTest("corpus not present")
+        text = src.read_text(encoding="utf-8", errors="replace")
+        ids = re.findall(r'\{ id = "([^"]+)", x = [^}]*tag = "wildlife"', self.lua)
+        self.assertEqual(sorted(ids), ["kwama forager", "rat"])
+        for i in ids:
+            self.assertIn('["%s"] = true' % i, text, i)   # in newAPIcreatures_fightV: the mod will target NPCs
 
     def test_the_plugin_stays_tiny(self):
         self.assertLessEqual(len(self.data), 40)
@@ -131,6 +160,58 @@ class SmokeEspLimits(unittest.TestCase):
         self.assertEqual(len(msgs), 3, msgs)
         for i in OLD_OVERLONG_FNAM:
             self.assertTrue(any(i in m and "FNAM" in m for m in msgs), (i, msgs))
+
+    def _cell(self, recs):
+        return next(r for r in recs if r["type"] == "Cell")
+
+    def test_cell_rules_hold_for_the_source(self):
+        b = load_builder()
+        self.assertEqual(b.validate_cell(self._cell(json.loads(JSON_PATH.read_text(encoding="utf-8")))), [])
+
+    def test_validator_rejects_low_or_missing_fog(self):
+        b = load_builder()
+        src = json.loads(JSON_PATH.read_text(encoding="utf-8"))
+        for bad in (0.0, 0.009, -1):
+            recs = copy.deepcopy(src)
+            self._cell(recs)["atmosphere_data"]["fog_density"] = bad
+            msgs = b.validate(recs)
+            self.assertTrue(any("fog" in m for m in msgs), (bad, msgs))
+        recs = copy.deepcopy(src)
+        self._cell(recs)["atmosphere_data"]["fog_density"] = 0.01
+        self.assertEqual(b.validate(recs), [])
+        recs = copy.deepcopy(src)
+        del self._cell(recs)["atmosphere_data"]      # an interior without atmosphere data has no fog either
+        self.assertTrue(any("fog" in m for m in b.validate(recs)))
+
+    def test_validator_requires_a_region_for_behave_like_exterior(self):
+        b = load_builder()
+        src = json.loads(JSON_PATH.read_text(encoding="utf-8"))
+        for mutate in (lambda c: c.pop("region"), lambda c: c.__setitem__("region", ""), lambda c: c.__setitem__("region", "  ")):
+            recs = copy.deepcopy(src)
+            mutate(self._cell(recs))
+            msgs = b.validate(recs)
+            self.assertTrue(any("no region" in m for m in msgs), msgs)
+        recs = copy.deepcopy(src)
+        self._cell(recs)["region"] = "x" * 40
+        self.assertTrue(any("region" in m and "limit" in m for m in b.validate(recs)))
+        # a plain interior (no sky) does not need one
+        recs = copy.deepcopy(src)
+        c = self._cell(recs)
+        c["data"]["flags"] = "IS_INTERIOR"
+        del c["region"]
+        self.assertEqual(b.validate(recs), [])
+
+    def test_validator_rejects_water_at_the_floor_unless_wanted(self):
+        b = load_builder()
+        src = json.loads(JSON_PATH.read_text(encoding="utf-8"))
+        recs = copy.deepcopy(src)
+        self._cell(recs)["water_height"] = 0.0
+        self.assertTrue(any("water" in m for m in b.validate(recs)))
+        recs = copy.deepcopy(src)
+        c = self._cell(recs)
+        c["water_height"] = 0.0
+        c["data"]["flags"] = "IS_INTERIOR | BEHAVES_LIKE_EXTERIOR | HAS_WATER"
+        self.assertEqual(b.validate(recs), [])
 
     def test_validator_rejects_fixed_size_overflows(self):
         b = load_builder()
